@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-alerts
+  namespace: monitoring
+data:
+  geoip-alerts.yaml: |
+    groups:
+      - name: geoip-api
+        rules:
+          - alert: GeoIPHighErrorRate
+            expr: |
+              sum(rate(geoip_http_requests_total{status=~"5.."}[5m]))
+              / sum(rate(geoip_http_requests_total[5m])) > 0.05
+            for: 5m
+            labels:
+              severity: critical
+              team: sre
+            annotations:
+              summary: "GeoIP API high error rate"
+              description: "Error rate is above 5% for the last 5 minutes"
+
+          - alert: GeoIPHighLatency
+            expr: |
+              histogram_quantile(0.95, sum(rate(geoip_http_request_duration_seconds_bucket[5m])) by (le)) > 1
+            for: 5m
+            labels:
+              severity: warning
+              team: sre
+            annotations:
+              summary: "GeoIP API high latency"
+              description: "P95 latency is above 1 second"
+
+          - alert: GeoIPCacheMissRateHigh
+            expr: |
+              rate(geoip_cache_misses_total[5m])
+              / (rate(geoip_cache_hits_total[5m]) + rate(geoip_cache_misses_total[5m])) > 0.8
+            for: 10m
+            labels:
+              severity: warning
+              team: sre
+            annotations:
+              summary: "GeoIP cache miss rate is high"
+              description: "Cache miss rate exceeds 80%"
+
+          - alert: GeoIPExternalAPIFailures
+            expr: |
+              rate(geoip_external_api_calls_total{status="error"}[5m]) > 0.1
+            for: 5m
+            labels:
+              severity: critical
+              team: sre
+            annotations:
+              summary: "External GeoIP API failures"
+              description: "External API error rate is elevated"
+
+      - name: kubernetes
+        rules:
+          - alert: PodCrashLooping
+            expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 3
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash looping"
+
+          - alert: NodeNotReady
+            expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Node {{ $labels.node }} is not ready"
+
+          - alert: PostgresReplicationLag
+            expr: cnpg_pg_replication_lag > 30
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "PostgreSQL replication lag is high"
+              description: "Replication lag exceeds 30 seconds"
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: geoip-alerts
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: geoip-api
+      rules:
+        - alert: GeoIPHighErrorRate
+          expr: |
+            sum(rate(geoip_http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(geoip_http_requests_total[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "GeoIP API high error rate"

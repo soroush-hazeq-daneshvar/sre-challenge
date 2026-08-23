@@ -1,0 +1,163 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: logging
+spec:
+  serviceName: elasticsearch
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: elasticsearch
+
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+
+    spec:
+      containers:
+      - name: elasticsearch
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+
+        ports:
+        - containerPort: 9200
+          name: http
+        - containerPort: 9300
+          name: transport
+
+        env:
+        - name: discovery.type
+          value: single-node
+
+        - name: xpack.security.enabled
+          value: "false"
+
+        - name: ES_JAVA_OPTS
+          value: "-Xms1g -Xmx1g"
+
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+
+        volumeMounts:
+        - name: data
+          mountPath: /usr/share/elasticsearch/data
+
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      storageClassName: local-path
+      accessModes:
+      - ReadWriteOnce
+
+      resources:
+        requests:
+          storage: 20Gi
+
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: logging
+
+spec:
+  selector:
+    app: elasticsearch
+
+  ports:
+  - name: http
+    port: 9200
+    targetPort: http
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: logging
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: kibana
+
+  template:
+    metadata:
+      labels:
+        app: kibana
+
+    spec:
+      containers:
+      - name: kibana
+        image: docker.elastic.co/kibana/kibana:8.12.0
+
+        ports:
+        - containerPort: 5601
+
+        env:
+        - name: ELASTICSEARCH_HOSTS
+          value: "http://elasticsearch.logging.svc:9200"
+
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: logging
+
+spec:
+  selector:
+    app: kibana
+
+  ports:
+  - port: 5601
+    targetPort: 5601
+
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kibana
+  namespace: logging
+
+spec:
+  ingressClassName: nginx
+
+  rules:
+  - host: kibana.local
+
+    http:
+      paths:
+      - path: /
+
+        pathType: Prefix
+
+        backend:
+          service:
+            name: kibana
+
+            port:
+              number: 5601

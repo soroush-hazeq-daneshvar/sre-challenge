@@ -1,0 +1,44 @@
+---
+- name: Prepare all Kubernetes nodes
+  hosts: k8s_cluster
+  become: true
+  gather_facts: true
+  tags: [setup]
+  roles:
+    - role: common
+      tags: [common, hardening]
+    - role: containerd
+      tags: [containerd, runtime]
+    - role: kubernetes
+      tags: [kubernetes, k8s, packages]
+
+- name: Initialize the control plane
+  hosts: control_plane
+  become: true
+  gather_facts: true
+  tags: [init]
+  tasks:
+    - name: Run kubeadm init
+      ansible.builtin.include_role:
+        name: kubernetes
+        tasks_from: init.yml
+
+- name: Join worker nodes
+  hosts: workers
+  become: true
+  gather_facts: true
+  serial: 1
+  tags: [join]
+  tasks:
+    - name: Run kubeadm join
+      ansible.builtin.include_role:
+        name: kubernetes
+        tasks_from: join.yml
+
+- name: Install cluster networking
+  hosts: control_plane
+  become: true
+  gather_facts: true
+  tags: [calico, cni]
+  roles:
+    - role: calico

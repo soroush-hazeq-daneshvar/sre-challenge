@@ -1,0 +1,47 @@
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    retention: 15d
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 50Gi
+
+
+grafana:
+  enabled: true
+
+  adminPassword: changeme
+
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+
+
+alertmanager:
+  enabled: true
+
+  config:
+    global:
+      resolve_timeout: 5m
+kubeStateMetrics:
+  enabled: true
+nodeExporter:
+  enabled: true

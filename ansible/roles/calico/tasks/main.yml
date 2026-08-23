@@ -1,0 +1,104 @@
+---
+- name: Create local Calico manifest directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/calico
+    state: directory
+    mode: "0755"
+
+- name: Download Calico operator CRDs
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/v1_crd_projectcalico_org.yaml
+    dest: /etc/kubernetes/calico/v1_crd_projectcalico_org.yaml
+    mode: "0644"
+
+- name: Download Tigera operator manifest
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
+    dest: /etc/kubernetes/calico/tigera-operator.yaml
+    mode: "0644"
+
+- name: Apply Calico operator CRDs
+  ansible.builtin.command: >-
+    kubectl apply --server-side --force-conflicts
+    -f /etc/kubernetes/calico/v1_crd_projectcalico_org.yaml
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  register: calico_crds
+  changed_when: "'configured' in calico_crds.stdout or 'created' in calico_crds.stdout or 'serverside-applied' in calico_crds.stdout"
+
+- name: Apply Tigera operator
+  ansible.builtin.command: >-
+    kubectl apply --server-side --force-conflicts
+    -f /etc/kubernetes/calico/tigera-operator.yaml
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  register: tigera_operator
+  changed_when: "'configured' in tigera_operator.stdout or 'created' in tigera_operator.stdout or 'serverside-applied' in tigera_operator.stdout"
+
+- name: Wait for the Tigera operator deployment
+  ansible.builtin.command: >-
+    kubectl rollout status deployment/tigera-operator
+    -n tigera-operator --timeout=180s
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  changed_when: false
+
+- name: Render Calico custom resources
+  ansible.builtin.template:
+    src: custom-resources.yaml.j2
+    dest: /etc/kubernetes/calico/custom-resources.yaml
+    mode: "0644"
+
+- name: Apply Calico custom resources
+  ansible.builtin.command: kubectl apply -f /etc/kubernetes/calico/custom-resources.yaml
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  register: calico_custom_resources
+  changed_when: "'configured' in calico_custom_resources.stdout or 'created' in calico_custom_resources.stdout"
+
+- name: Wait until Calico pods exist
+  ansible.builtin.command: kubectl get pods -n calico-system --no-headers
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  register: calico_pods
+  until: calico_pods.stdout_lines | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Wait for Calico pods to become ready
+  ansible.builtin.command: >-
+    kubectl wait --for=condition=Ready pods --all
+    -n calico-system --timeout=300s
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  changed_when: false
+
+- name: Wait for all nodes to become Ready
+  ansible.builtin.command: kubectl wait --for=condition=Ready nodes --all --timeout=300s
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  changed_when: false
+
+- name: Check control-plane taint
+  ansible.builtin.command: >-
+    kubectl get nodes
+    -l node-role.kubernetes.io/control-plane
+    -o jsonpath='{.items[0].spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")].key}'
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  register: control_plane_taint
+  changed_when: false
+  when: control_plane_schedulable
+
+- name: Allow scheduling on the control plane
+  ansible.builtin.command: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  when:
+    - control_plane_schedulable
+    - control_plane_taint.stdout | length > 0
+  register: taint_remove
+  failed_when:
+    - taint_remove.rc | default(0) != 0
+    - "'not found' not in (taint_remove.stderr | default(''))"

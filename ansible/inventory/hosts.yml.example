@@ -1,0 +1,14 @@
+all:
+  children:
+    k8s_cluster:
+      children:
+        control_plane:
+          hosts:
+            control-plane:
+              ansible_host: 203.0.113.10
+        workers:
+          hosts:
+            worker-1:
+              ansible_host: 203.0.113.11
+            worker-2:
+              ansible_host: 203.0.113.12

@@ -1,0 +1,176 @@
+---
+- name: Check if containerd is already installed
+  ansible.builtin.command:
+    cmd: containerd --version
+  register: containerd_installed
+  changed_when: false
+  failed_when: false
+
+- name: Set containerd installation required
+  ansible.builtin.set_fact:
+    containerd_install_required: "{{ containerd_installed.rc != 0 }}"
+
+- name: Install container runtime dependencies
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - tar
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: containerd_install_required
+
+- name: Set containerd architecture
+  ansible.builtin.set_fact:
+    containerd_arch: >-
+      {{
+        {
+          'x86_64': 'amd64',
+          'aarch64': 'arm64'
+        }[ansible_architecture]
+      }}
+  when: containerd_install_required
+
+- name: Set containerd download URL
+  ansible.builtin.set_fact:
+    containerd_archive: "containerd-{{ containerd_version }}-linux-{{ containerd_arch }}.tar.gz"
+    containerd_download_url: >-
+      https://github.com/containerd/containerd/releases/download/v{{ containerd_version }}/containerd-{{ containerd_version }}-linux-{{ containerd_arch }}.tar.gz
+  when: containerd_install_required
+
+- name: Download containerd archive
+  ansible.builtin.get_url:
+    url: "{{ containerd_download_url }}"
+    dest: "/tmp/{{ containerd_archive }}"
+    mode: "0644"
+  when: containerd_install_required
+
+- name: Install containerd binaries
+  ansible.builtin.unarchive:
+    src: "/tmp/{{ containerd_archive }}"
+    dest: /usr/local
+    remote_src: true
+    owner: root
+    group: root
+  when: containerd_install_required
+  notify: Restart containerd
+
+
+# ---------------------------------------------------------
+# Containerd configuration
+# ---------------------------------------------------------
+
+- name: Ensure containerd configuration directory exists
+  ansible.builtin.file:
+    path: /etc/containerd
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Check containerd configuration
+  ansible.builtin.stat:
+    path: /etc/containerd/config.toml
+  register: containerd_config
+
+- name: Generate default containerd configuration
+  ansible.builtin.command:
+    cmd: /usr/local/bin/containerd config default
+  register: containerd_default_config
+  changed_when: false
+  when:
+    - not containerd_config.stat.exists
+      or containerd_config.stat.size == 0
+
+- name: Install default containerd configuration
+  ansible.builtin.copy:
+    dest: /etc/containerd/config.toml
+    content: "{{ containerd_default_config.stdout }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - not containerd_config.stat.exists
+      or containerd_config.stat.size == 0
+  notify: Restart containerd
+
+
+# ---------------------------------------------------------
+# Kubernetes containerd configuration
+# ---------------------------------------------------------
+
+- name: Enable containerd CRI plugin
+  ansible.builtin.lineinfile:
+    path: /etc/containerd/config.toml
+    regexp: '^disabled_plugins\s*='
+    state: absent
+  notify: Restart containerd
+
+- name: Configure systemd cgroup driver
+  ansible.builtin.replace:
+    path: /etc/containerd/config.toml
+    regexp: 'SystemdCgroup\s*=\s*false'
+    replace: 'SystemdCgroup = true'
+  notify: Restart containerd
+
+- name: Configure Kubernetes sandbox image
+  ansible.builtin.replace:
+    path: /etc/containerd/config.toml
+    regexp: 'sandbox_image\s*=\s*".*"'
+    replace: 'sandbox_image = "{{ containerd_pause_image }}"'
+  notify: Restart containerd
+
+
+# ---------------------------------------------------------
+# systemd service
+# ---------------------------------------------------------
+
+- name: Install containerd systemd service
+  ansible.builtin.get_url:
+    url: "https://raw.githubusercontent.com/containerd/containerd/v{{ containerd_version }}/containerd.service"
+    dest: /etc/systemd/system/containerd.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart containerd
+
+
+# ---------------------------------------------------------
+# crictl
+# ---------------------------------------------------------
+
+- name: Configure crictl runtime endpoint
+  ansible.builtin.copy:
+    dest: /etc/crictl.yaml
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      runtime-endpoint: {{ cri_socket }}
+      image-endpoint: {{ cri_socket }}
+      timeout: 10
+      debug: false
+
+
+# ---------------------------------------------------------
+# Service
+# ---------------------------------------------------------
+
+- name: Enable and start containerd
+  ansible.builtin.systemd:
+    name: containerd
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Report existing containerd
+  ansible.builtin.debug:
+    msg: >-
+      containerd is already installed
+      ({{ containerd_installed.stdout }}).
+      Skipping binary installation.
+  when: not containerd_install_required
+

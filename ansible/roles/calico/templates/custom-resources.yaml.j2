@@ -1,0 +1,31 @@
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    ipPools:
+      - name: default-ipv4-ippool
+        blockSize: 26
+        cidr: {{ pod_network_cidr }}
+        encapsulation: VXLANCrossSubnet
+        natOutgoing: Enabled
+        nodeSelector: all()
+---
+apiVersion: operator.tigera.io/v1
+kind: APIServer
+metadata:
+  name: default
+spec: {}
+{% if calico_enable_observability %}
+---
+apiVersion: operator.tigera.io/v1
+kind: Goldmane
+metadata:
+  name: default
+---
+apiVersion: operator.tigera.io/v1
+kind: Whisker
+metadata:
+  name: default
+{% endif %}

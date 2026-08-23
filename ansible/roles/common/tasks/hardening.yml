@@ -1,0 +1,44 @@
+---
+- name: Set timezone to UTC
+  community.general.timezone:
+    name: UTC
+
+- name: Install security packages
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - apt-listchanges
+      - fail2ban
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enable automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+- name: Harden SSH daemon
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^#?PermitRootLogin\b', line: 'PermitRootLogin yes' }
+    - { regexp: '^#?PasswordAuthentication\b', line: 'PasswordAuthentication no' }
+    - { regexp: '^#?X11Forwarding\b', line: 'X11Forwarding no' }
+  notify: Restart ssh
+
+- name: Apply host security sysctl settings
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+  loop:
+    - { key: kernel.dmesg_restrict, value: "1" }
+    - { key: net.ipv4.conf.all.rp_filter, value: "1" }
+    - { key: net.ipv4.conf.default.rp_filter, value: "1" }

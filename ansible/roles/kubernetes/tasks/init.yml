@@ -1,0 +1,46 @@
+---
+- name: Check whether the control plane is already initialized
+  ansible.builtin.stat:
+    path: "{{ kubeconfig_path }}"
+  register: kubeadm_admin_conf
+
+- name: Write kubeadm init configuration
+  ansible.builtin.template:
+    src: kubeadm-config.yaml.j2
+    dest: "{{ kubeadm_config_path }}"
+    mode: "0600"
+  when: not kubeadm_admin_conf.stat.exists
+
+- name: Initialize the Kubernetes control plane
+  ansible.builtin.command: kubeadm init --config {{ kubeadm_config_path }} --upload-certs
+  args:
+    creates: "{{ kubeconfig_path }}"
+
+- name: Wait for the Kubernetes API to become ready
+  ansible.builtin.uri:
+    url: https://127.0.0.1:6443/healthz
+    method: GET
+    validate_certs: false
+    status_code: 200
+  register: k8s_api_health
+  until: k8s_api_health.status | default(0) == 200
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Create kubeconfig directory for the Ansible user
+  ansible.builtin.file:
+    path: /home/{{ ansible_user }}/.kube
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0755"
+
+- name: Install kubeconfig for the Ansible user
+  ansible.builtin.copy:
+    src: "{{ kubeconfig_path }}"
+    dest: /home/{{ ansible_user }}/.kube/config
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"

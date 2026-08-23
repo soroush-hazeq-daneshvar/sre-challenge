@@ -1,0 +1,65 @@
+---
+ansible_user: root
+ansible_ssh_private_key_file: ~/.ssh/id_rsa
+ansible_python_interpreter: /usr/bin/python3
+
+# Kubernetes
+k8s_minor_version: "1.36"
+k8s_package_version: "1.36.*"
+k8s_kubernetes_version: ""
+
+runc_version: "1.3.3"
+
+
+cri_socket: "unix:///run/containerd/containerd.sock"
+
+pod_network_cidr: "192.168.0.0/16"
+service_cidr: "10.96.0.0/12"
+
+control_plane_endpoint: "{{ hostvars[groups['control_plane'][0]]['ansible_host'] }}:6443"
+k8s_advertise_address: "{{ ansible_default_ipv4.address }}"
+
+control_plane_schedulable: false
+
+kubeconfig_path: /etc/kubernetes/admin.conf
+kubeadm_config_path: /etc/kubernetes/kubeadm-config.yaml
+join_token_ttl: "24h"
+
+# Containerd
+# Official containerd release from GitHub
+containerd_version: "2.3.3"
+containerd_pause_image: "registry.k8s.io/pause:3.10"
+
+# Calico
+calico_version: "v3.32.1"
+calico_enable_observability: false
+
+# Node configuration
+disable_swap: true
+enable_ufw: true
+
+# Firewall
+ufw_rules:
+  - { port: "22", proto: tcp }
+  - { port: "80", proto: tcp }
+  - { port: "443", proto: tcp }
+  - { port: "6443", proto: tcp }
+  - { port: "2379:2380", proto: tcp }
+  - { port: "10250", proto: tcp }
+  - { port: "10256", proto: tcp }
+  - { port: "10257", proto: tcp }
+  - { port: "10259", proto: tcp }
+  - { port: "179", proto: tcp }
+  - { port: "4789", proto: udp }
+  - { port: "5473", proto: tcp }
+  - { port: "30000:32767", proto: tcp }
+
+ufw_allowed_cidrs:
+  - "{{ pod_network_cidr }}"
+  - "{{ service_cidr }}"
+
+# Kubernetes kernel parameters
+sysctl_settings:
+  net.bridge.bridge-nf-call-iptables: 1
+  net.bridge.bridge-nf-call-ip6tables: 1
+  net.ipv4.ip_forward: 1

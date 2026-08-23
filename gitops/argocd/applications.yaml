@@ -7,78 +7,100 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
+
   source:
-    repoURL: https://gitlab.com/sre-challenge/sre-challenge.git
+    repoURL: https://github.com/soroush-hazeq-daneshvar/sre-challenge.git
     targetRevision: main
     path: kubernetes/geoip-api
+
   destination:
     server: https://kubernetes.default.svc
     namespace: geoip
+
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: postgres
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
+
   source:
-    repoURL: https://gitlab.com/sre-challenge/sre-challenge.git
+    repoURL: https://github.com/soroush-hazeq-daneshvar/sre-challenge.git
     targetRevision: main
     path: kubernetes/postgres
+
   destination:
     server: https://kubernetes.default.svc
     namespace: postgres
+
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: monitoring
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
+
   source:
-    repoURL: https://gitlab.com/sre-challenge/sre-challenge.git
+    repoURL: https://github.com/soroush-hazeq-daneshvar/sre-challenge.git
     targetRevision: main
     path: kubernetes/monitoring
+
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring
+
   syncPolicy:
     automated:
+      prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: logging
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
+
   source:
-    repoURL: https://gitlab.com/sre-challenge/sre-challenge.git
+    repoURL: https://github.com/soroush-hazeq-daneshvar/sre-challenge.git
     targetRevision: main
     path: kubernetes/logging
+
   destination:
     server: https://kubernetes.default.svc
     namespace: logging
+
   syncPolicy:
     automated:
+      prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
-

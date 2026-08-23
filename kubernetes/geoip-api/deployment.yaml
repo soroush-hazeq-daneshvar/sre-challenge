@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: geoip-api
-          image: registry.gitlab.com/sre-challenge/geoip-api:latest
+          image: docker.io/soroushmanhd/geoip-api:latest
           ports:
             - name: http
               containerPort: 8080

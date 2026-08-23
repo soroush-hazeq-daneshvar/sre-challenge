@@ -1,148 +1,448 @@
-# راهنمای نصب و راه‌اندازی
+# 4. Install Kubernetes Components
 
-## پیش‌نیازها
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Terraform | >= 1.5 | Infrastructure provisioning |
-| Ansible | >= 2.14 | Configuration management |
-| kubectl | >= 1.34 | Kubernetes management |
-| Docker | >= 24 | Container builds |
-| Go | >= 1.22 | Application development |
-| Helm | >= 3.12 | Package management |
+## 4.1 Base Configuration
 
-## مرحله 1: Provisioning با Terraform
+
+Create project namespaces:
+
 
 ```bash
-cd terraform
-
-# تنظیم متغیرها
-cp terraform.tfvars.example terraform.tfvars
-# ویرایش terraform.tfvars و IP خود را در allowed_cidr_blocks قرار دهید
-
-# اجرا
-terraform init
-terraform plan
-terraform apply
-
-# ذخیره inventory برای Ansible
-terraform output -raw ansible_inventory > ../ansible/inventory/hosts.yml
+kubectl apply \
+-f kubernetes/base/namespaces.yaml
 ```
 
-**خروجی:**
-- 1 Control Plane VM (t3.medium)
-- 2 Worker VM (t3.large)
-- VPC, Subnets, Security Groups
 
-## مرحله 2: راه‌اندازی Kubernetes با Ansible
+Verify:
+
 
 ```bash
-cd ansible
-ansible-galaxy collection install -r requirements.yml
-ansible all -m ping
-ansible-playbook site.yml
-
-# بررسی cluster
-ssh ubuntu@<control-plane-ip>
-kubectl get nodes
-# Expected: 3 nodes Ready
+kubectl get namespaces
 ```
 
-## مرحله 3: نصب Cluster Add-ons
+
+Expected namespaces:
+
+```
+geoip
+postgres
+monitoring
+logging
+```
+
+
+---
+
+# 4.2 NGINX Ingress Controller (HelmChart)
+
+
+The project deploys ingress-nginx using Kubernetes HelmChart resource.
+
+
+Apply ingress configuration:
+
 
 ```bash
-# NGINX Ingress Controller
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.0/deploy/static/provider/cloud/deploy.yaml
+kubectl apply \
+-f kubernetes/base/ingress-nginx.yaml
+```
 
-# cert-manager
-kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
 
-# CloudNativePG Operator
-kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.22/releases/cnpg-1.22.0.yaml
+Verify:
 
-# Metrics Server
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
 
-# ArgoCD
+```bash
+kubectl get pods -n ingress-nginx
+```
+
+
+Expected:
+
+```
+ingress-nginx-controller   Running
+```
+
+
+Check service:
+
+
+```bash
+kubectl get svc -n ingress-nginx
+```
+
+
+---
+
+# 4.3 StorageClass
+
+
+The cluster uses Rancher Local Path Provisioner.
+
+
+Verify StorageClass:
+
+
+```bash
+kubectl get storageclass
+```
+
+
+Expected:
+
+
+```
+NAME
+local-path
+```
+
+
+This StorageClass provides persistent storage for:
+
+- PostgreSQL
+- Prometheus
+- Grafana
+- Elasticsearch
+
+
+---
+
+# 4.4 CloudNativePG Operator
+
+
+CloudNativePG provides PostgreSQL High Availability.
+
+
+Install operator:
+
+
+```bash
+kubectl apply \
+-f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.25/releases/cnpg-1.25.0.yaml
+```
+
+
+Verify:
+
+
+```bash
+kubectl get pods -n cnpg-system
+```
+
+
+Expected:
+
+
+```
+cnpg-controller-manager   Running
+```
+
+
+Deploy PostgreSQL cluster:
+
+
+```bash
+kubectl apply \
+-f kubernetes/postgres/cluster.yaml
+```
+
+
+Verify:
+
+
+```bash
+kubectl get cluster -n postgres
+
+
+kubectl get pods -n postgres
+```
+
+
+---
+
+# 4.5 Monitoring Stack (Helm)
+
+
+The monitoring stack uses the official Prometheus Community Helm chart.
+
+
+Add Helm repository:
+
+
+```bash
+helm repo add prometheus-community \
+https://prometheus-community.github.io/helm-charts
+
+
+helm repo update
+```
+
+
+Install kube-prometheus-stack:
+
+
+```bash
+helm upgrade --install kube-prometheus-stack \
+prometheus-community/kube-prometheus-stack \
+-n monitoring \
+--create-namespace \
+-f kubernetes/monitoring/prometheus/helm-values.yaml
+```
+
+
+Verify:
+
+
+```bash
+kubectl get pods -n monitoring
+```
+
+
+Expected components:
+
+
+```
+Prometheus
+Grafana
+Alertmanager
+kube-state-metrics
+node-exporter
+```
+
+
+Deploy Prometheus alert rules:
+
+
+```bash
+kubectl apply \
+-f kubernetes/monitoring/prometheus/alerts.yaml
+```
+
+
+Deploy Grafana dashboard:
+
+
+```bash
+kubectl apply \
+-f kubernetes/monitoring/grafana/dashboard-geoip.yaml
+```
+
+
+Access Grafana:
+
+
+```bash
+kubectl port-forward \
+svc/kube-prometheus-stack-grafana \
+-n monitoring \
+3000:80
+```
+
+
+Open:
+
+
+```
+http://localhost:3000
+```
+
+
+Get Grafana password:
+
+
+```bash
+kubectl get secret \
+kube-prometheus-stack-grafana \
+-n monitoring \
+-o jsonpath="{.data.admin-password}" \
+| base64 -d
+```
+
+
+Default username:
+
+
+```
+admin
+```
+
+
+---
+
+# 4.6 Logging Stack
+
+
+## Elasticsearch
+
+
+Deploy Elasticsearch:
+
+
+```bash
+kubectl apply \
+-f kubernetes/logging/elasticsearch/elasticsearch.yaml
+```
+
+
+Verify:
+
+
+```bash
+kubectl get pods -n logging
+```
+
+
+Expected:
+
+
+```
+elasticsearch-0   Running
+```
+
+
+---
+
+## Fluent Bit
+
+
+Deploy Fluent Bit daemonset:
+
+
+```bash
+kubectl apply \
+-f kubernetes/logging/fluent-bit/daemonset.yaml
+```
+
+
+Verify:
+
+
+```bash
+kubectl get pods -n logging
+```
+
+
+Expected:
+
+
+```
+fluent-bit-*   Running
+```
+
+
+---
+
+## Kibana
+
+
+Kibana is deployed together with Elasticsearch manifest.
+
+
+Verify:
+
+
+```bash
+kubectl get pods -n logging
+```
+
+
+Access:
+
+```
+http://kibana.local
+```
+
+
+---
+
+# 4.7 ArgoCD Installation
+
+
+Create namespace:
+
+
+```bash
 kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 ```
 
-## مرحله 4: Deploy Platform Components
+
+Install ArgoCD:
+
 
 ```bash
-# Namespaces
-kubectl apply -f kubernetes/base/namespaces.yaml
-
-# PostgreSQL HA Cluster
-kubectl apply -f kubernetes/postgres/cluster.yaml
-kubectl wait --for=condition=Ready cluster/geoip-postgres -n postgres --timeout=300s
-
-# Monitoring Stack
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm install prometheus prometheus-community/kube-prometheus-stack \
-  -n monitoring --create-namespace \
-  -f kubernetes/monitoring/prometheus/helm-values.yaml
-kubectl apply -f kubernetes/monitoring/prometheus/alerts.yaml
-kubectl apply -f kubernetes/monitoring/grafana/dashboard-geoip.yaml
-
-# Logging Stack
-kubectl apply -f kubernetes/logging/elasticsearch/elasticsearch.yaml
-kubectl apply -f kubernetes/logging/fluent-bit/daemonset.yaml
-
-# GeoIP API
-kubectl apply -f kubernetes/geoip-api/deployment.yaml
-kubectl rollout status deployment/geoip-api -n geoip
+kubectl apply \
+-n argocd \
+-f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 ```
 
-## مرحله 5: GitOps با ArgoCD
+
+Verify:
+
 
 ```bash
-# Deploy ArgoCD applications
-kubectl apply -f gitops/argocd/applications.yaml
-
-# دسترسی به ArgoCD UI
-kubectl port-forward svc/argocd-server -n argocd 8080:443
-# Username: admin
-# Password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+kubectl get pods -n argocd
 ```
 
-## مرحله 6: تست
+
+Access ArgoCD:
+
 
 ```bash
-# Add to /etc/hosts
-echo "<ingress-ip> geoip.local kibana.local" | sudo tee -a /etc/hosts
-
-# Test API
-curl "http://geoip.local/country?ip=8.8.8.8"
-curl "http://geoip.local/country?ip=1.1.1.1"
-curl "http://geoip.local/metrics"
-
-# Test cache (second request should be faster)
-curl "http://geoip.local/country?ip=8.8.8.8" | jq .cache_hit
-# Expected: true
-
-# Access Grafana
-kubectl port-forward svc/prometheus-grafana -n monitoring 3000:80
-# http://localhost:3000 (admin/changeme)
-
-# Access Kibana
-# http://kibana.local:5601
+kubectl port-forward \
+svc/argocd-server \
+-n argocd \
+8080:443
 ```
 
-## CI/CD Setup (GitLab)
 
-1. Push repository to GitLab
-2. Configure CI/CD variables:
-   - `CI_REGISTRY_USER` / `CI_REGISTRY_PASSWORD`
-   - `KUBE_CONTEXT_STAGING` / `KUBE_CONTEXT_PRODUCTION`
-3. Pipeline runs automatically on push
+URL:
 
-## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LISTEN_ADDR` | `:8080` | Server listen address |
-| `DATABASE_URL` | postgres://... | PostgreSQL connection string |
-| `GEOIP_PROVIDER_URL` | `https://ipapi.co` | External GeoIP provider |
-| `GEOIP_PROVIDER_TIMEOUT` | `5s` | Provider request timeout |
+```
+https://localhost:8080
+```
+
+
+Get admin password:
+
+
+```bash
+kubectl get secret \
+argocd-initial-admin-secret \
+-n argocd \
+-o jsonpath="{.data.password}" \
+| base64 -d
+```
+
+
+---
+
+# 4.8 Deploy ArgoCD Applications
+
+
+Apply GitOps applications:
+
+
+```bash
+kubectl apply \
+-f gitops/argocd/applications.yaml
+```
+
+
+Managed applications:
+
+
+| Application | Namespace |
+|-------------|-----------|
+| geoip-api | geoip |
+| postgres | postgres |
+| monitoring | monitoring |
+| logging | logging |
+
+
+Check applications:
+
+
+```bash
+kubectl get applications \
+-n argocd
+```

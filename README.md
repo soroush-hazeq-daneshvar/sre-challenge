@@ -1,89 +1,441 @@
 # SRE Challenge - GeoIP Platform
 
-A production-ready Site Reliability Engineering challenge implementation featuring Infrastructure as Code, Kubernetes, GeoIP API, PostgreSQL HA, Monitoring, Logging, and GitOps.
+A production-ready Site Reliability Engineering platform implementing:
 
-## Architecture Overview
+- Infrastructure as Code
+- Kubernetes cluster automation
+- Go-based GeoIP API
+- PostgreSQL High Availability
+- Monitoring and Alerting
+- Centralized Logging
+- GitOps Deployment with ArgoCD
+
+
+Repository:
+
+https://github.com/soroush-hazeq-daneshvar/sre-challenge
+
+
+---
+
+# Architecture Overview
+
 
 ```
-Terraform → Ansible → Kubernetes → PostgreSQL → GeoIP API → Monitoring → ELK
+Developer
+    |
+    v
+GitHub Repository
+    |
+    |
+    +----------------------+
+    |                      |
+    v                      v
+
+Terraform              Application Code
+Ansible               Go GeoIP API
+
+    |                      |
+    |                      v
+
+    |                Docker Build
+
+    |                      |
+    |                      v
+
+    |                Docker Hub
+
+    |        soroushmanhd/geoip-api:latest
+
+    |                      |
+    +----------+-----------+
+               |
+               v
+
+             ArgoCD
+
+               |
+               v
+
+        Kubernetes Cluster
+
+               |
+     +---------+----------+
+     |         |          |
+     v         v          v
+
+ GeoIP API PostgreSQL Monitoring
+
+            Logging
+
 ```
+
+
+---
+
+# Technology Stack
+
 
 | Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Infrastructure | Terraform (AWS) | VM provisioning (1 CP + 2 Workers) |
-| Configuration | Ansible | OS hardening, K8s, Calico CNI |
+|---|---|---|
+| Infrastructure | Terraform | VM and network provisioning |
+| Configuration | Ansible | OS configuration, Kubernetes installation |
+| Container Runtime | containerd | Kubernetes container runtime |
+| CNI | Calico | Kubernetes networking |
 | Orchestration | Kubernetes 1.34 | Container orchestration |
-| Database | CloudNativePG | HA PostgreSQL (1 Primary + 2 Replicas) |
-| Application | Go + Gorilla Mux | GeoIP lookup API with caching |
-| Ingress | NGINX Ingress | External traffic routing |
-| Monitoring | Prometheus + Grafana | Metrics & dashboards |
-| Alerting | Alertmanager | Email, Slack, Telegram notifications |
-| Logging | Fluent Bit + ELK | Centralized log aggregation |
-| CI/CD | GitLab CI | Build, test, deploy pipeline |
-| GitOps | ArgoCD | Declarative cluster sync |
+| Database | CloudNativePG | HA PostgreSQL cluster |
+| Application | Go + Gorilla Mux | GeoIP REST API |
+| Container Registry | Docker Hub | Container image storage |
+| Ingress | NGINX Ingress Controller | External traffic routing |
+| Monitoring | Prometheus + Grafana | Metrics and dashboards |
+| Alerting | Alertmanager | Alert management |
+| Logging | Fluent Bit + Elasticsearch + Kibana | Centralized logging |
+| GitOps | ArgoCD | Kubernetes deployment synchronization |
 
-## Quick Start
+
+---
+
+# Infrastructure Architecture
+
+
+## Terraform
+
+Location:
+
+```
+terraform/
+```
+
+
+Terraform provisions:
+
+- Virtual machines
+- Networking
+- Security rules
+- Infrastructure state
+
+
+Example:
 
 ```bash
-# 1. Provision infrastructure
 cd terraform
+
 cp terraform.tfvars.example terraform.tfvars
-terraform init && terraform apply
 
-# 2. Configure Kubernetes cluster
-cd ../ansible
+terraform init
+
+terraform plan
+
+terraform apply
+```
+
+
+---
+
+## Ansible
+
+Location:
+
+```
+ansible/
+```
+
+
+Ansible configures:
+
+- Linux hosts
+- Kernel parameters
+- Container runtime
+- Kubernetes components
+- Calico CNI
+
+
+Example:
+
+```bash
+cd ansible
+
 ansible-galaxy collection install -r requirements.yml
-ansible-playbook site.yml
 
-# 3. Deploy platform components
+ansible-playbook site.yml
+```
+
+
+---
+
+# Kubernetes Platform
+
+
+Namespaces:
+
+
+```
+kubernetes/
+
+├── base/
+│   └── namespaces.yaml
+│
+├── geoip-api/
+│   └── deployment.yaml
+│
+├── postgres/
+│   └── cluster.yaml
+│
+├── monitoring/
+│   ├── Prometheus
+│   ├── Grafana
+│   └── Alertmanager
+│
+└── logging/
+    ├── Fluent Bit
+    ├── Elasticsearch
+    └── Kibana
+```
+
+
+---
+
+# Quick Start
+
+
+## 1. Provision Infrastructure
+
+
+```bash
+cd terraform
+
+cp terraform.tfvars.example terraform.tfvars
+
+terraform init
+
+terraform apply
+```
+
+
+---
+
+## 2. Configure Kubernetes Cluster
+
+
+```bash
+cd ../ansible
+
+ansible-galaxy collection install -r requirements.yml
+
+ansible-playbook site.yml
+```
+
+
+Verify:
+
+```bash
+kubectl get nodes
+```
+
+
+Expected:
+
+```
+NAME        STATUS
+node-1      Ready
+node-2      Ready
+node-3      Ready
+```
+
+
+---
+
+# 3. Install Cluster Components
+
+
+## Create Namespaces
+
+
+```bash
 kubectl apply -f kubernetes/base/namespaces.yaml
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+```
+
+
+---
+
+## Install NGINX Ingress
+
+
+```bash
+helm repo add ingress-nginx \
+https://kubernetes.github.io/ingress-nginx
+
 
 helm repo update
 
-helm upgrade --install ingress-nginx \
-  ingress-nginx/ingress-nginx \
-  --namespace ingress-nginx \
-  --create-namespace \
-  --values kubernetes/base/ingress-nginx.yaml
-kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/main/releases/cnpg-1.26.0.yaml
-kubectl apply --server-side \
-  -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/v1.26.0/config/crd/bases/postgresql.cnpg.io_poolers.yaml
-  
-kubectl apply -f kubernetes/postgres/
-kubectl apply -f kubernetes/monitoring/
-kubectl apply -f kubernetes/logging/
-kubectl apply -f kubernetes/geoip-api/
 
-# 4. Test the API
+helm upgrade --install ingress-nginx \
+ingress-nginx/ingress-nginx \
+-n ingress-nginx \
+--create-namespace
+```
+
+
+---
+
+## Install CloudNativePG
+
+
+```bash
+kubectl apply -f \
+https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/main/releases/cnpg-1.26.0.yaml
+```
+
+
+Verify:
+
+```bash
+kubectl get pods -n cnpg-system
+```
+
+
+---
+
+# 4. Deploy Platform Components
+
+
+## PostgreSQL
+
+
+```bash
+kubectl apply -f kubernetes/postgres/
+```
+
+
+Check:
+
+```bash
+kubectl get pods -n postgres
+```
+
+
+---
+
+## Monitoring
+
+
+Install kube-prometheus-stack:
+
+
+```bash
+helm repo add prometheus-community \
+https://prometheus-community.github.io/helm-charts
+
+
+helm repo update
+
+
+helm upgrade --install monitoring \
+prometheus-community/kube-prometheus-stack \
+-n monitoring \
+--create-namespace \
+-f kubernetes/monitoring/prometheus/helm-values.yaml
+```
+
+
+Apply dashboards and alerts:
+
+
+```bash
+kubectl apply -f kubernetes/monitoring/
+```
+
+
+---
+
+## Logging
+
+
+```bash
+kubectl apply -f kubernetes/logging/
+```
+
+
+---
+
+## GeoIP API
+
+
+The application image:
+
+```
+soroushmanhd/geoip-api:latest
+```
+
+
+Deploy:
+
+
+```bash
+kubectl apply -f kubernetes/geoip-api/
+```
+
+
+Check:
+
+
+```bash
+kubectl get pods -n geoip
+```
+
+
+---
+
+# 5. Deploy with ArgoCD
+
+
+Install ArgoCD:
+
+
+```bash
+kubectl create namespace argocd
+
+
+kubectl apply -n argocd \
+-f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+
+
+Deploy applications:
+
+
+```bash
+kubectl apply -f gitops/argocd/applications.yaml
+```
+
+
+ArgoCD watches:
+
+```
+https://github.com/soroush-hazeq-daneshvar/sre-challenge
+```
+
+
+---
+
+# API Usage
+
+
+## GeoIP Lookup
+
+
+Request:
+
+
+```bash
 curl "http://geoip.local/country?ip=8.8.8.8"
 ```
 
-## Project Structure
 
-```
-sre-challenge/
-├── terraform/          # AWS VM provisioning
-├── ansible/            # K8s cluster setup & hardening
-├── app/geoip-api/      # Go GeoIP API application
-├── kubernetes/         # K8s manifests
-│   ├── base/           # Namespaces
-│   ├── postgres/       # CloudNativePG cluster
-│   ├── geoip-api/      # Application deployment
-│   ├── monitoring/     # Prometheus, Grafana, Alertmanager
-│   └── logging/        # Fluent Bit, Elasticsearch, Kibana
-├── gitops/argocd/      # ArgoCD applications
-├── docs/               # Full documentation
-└── .gitlab-ci.yml      # CI/CD pipeline
-```
+Response:
 
-## API Usage
 
-```bash
-# Get country for an IP
-GET /country?ip=8.8.8.8
-
-# Response
+```json
 {
   "ip": "8.8.8.8",
   "country": "United States",
@@ -92,25 +444,158 @@ GET /country?ip=8.8.8.8
   "cache_hit": true,
   "source": "cache"
 }
-
-# Health checks
-GET /health
-GET /ready
-GET /metrics
 ```
 
-## Documentation
+
+---
+
+## Health Checks
+
+
+```bash
+curl http://geoip.local/health
+
+curl http://geoip.local/ready
+
+curl http://geoip.local/metrics
+```
+
+
+---
+
+# Project Structure
+
+
+```
+sre-challenge/
+
+├── terraform/
+│   └── Infrastructure provisioning
+
+├── ansible/
+│   └── Kubernetes cluster automation
+
+├── app/
+│   └── geoip-api/
+│       └── Go application
+
+├── kubernetes/
+│   ├── base/
+│   ├── geoip-api/
+│   ├── postgres/
+│   ├── monitoring/
+│   └── logging/
+
+├── gitops/
+│   └── argocd/
+
+├── docs/
+│   ├── architecture.md
+│   ├── setup.md
+│   ├── runbooks.md
+│   ├── api.md
+│   ├── cicd.md
+│   └── proposal.md
+
+└── README.md
+```
+
+
+---
+
+# Documentation
+
 
 | Document | Description |
-|----------|-------------|
-| [Architecture](docs/architecture.md) | System design and component details |
-| [Setup Guide](docs/setup.md) | Step-by-step installation |
-| [Runbooks](docs/runbooks.md) | Operational procedures |
-| [API Docs](docs/api.md) | API reference |
-| [CI/CD](docs/cicd.md) | Pipeline explanation |
-| [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes |
-| [Proposal](docs/proposal.md) | Architecture justification (FA/EN) |
+|---|---|
+| Architecture | System design and component details |
+| Setup Guide | Complete installation guide |
+| Runbooks | Operational troubleshooting procedures |
+| API Docs | API reference |
+| CI/CD | Deployment pipeline explanation |
+| Troubleshooting | Common issues and solutions |
+| Proposal | Architecture decisions and justification |
 
-## License
 
-MIT
+Links:
+
+
+- [Architecture](docs/architecture.md)
+- [Setup Guide](docs/setup.md)
+- [Runbooks](docs/runbooks.md)
+- [API Documentation](docs/api.md)
+- [CI/CD](docs/cicd.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Proposal](docs/proposal.md)
+
+
+---
+
+# Observability
+
+
+Monitoring stack:
+
+
+```
+Application Metrics
+
+        |
+        v
+
+Prometheus
+
+        |
+        +------------+
+
+        |            |
+
+        v            v
+
+     Grafana    Alertmanager
+```
+
+
+Logging:
+
+
+```
+Kubernetes Pods
+
+        |
+
+        v
+
+Fluent Bit
+
+        |
+
+        v
+
+Elasticsearch
+
+        |
+
+        v
+
+Kibana
+```
+
+
+---
+
+# Security Features
+
+
+Implemented security practices:
+
+- Non-root containers
+- Distroless application image
+- Kubernetes RBAC
+- OS hardening with Ansible
+- Network policies
+- GitOps controlled deployment
+- Infrastructure as Code
+
+
+---

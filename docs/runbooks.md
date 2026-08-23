@@ -2,189 +2,532 @@
 
 ## RB-001: GeoIP API Down
 
-**Severity:** Critical  
-**Symptoms:** `/health` returns error, no response from API
+**Severity:** Critical
 
-### Diagnosis
+**Symptoms:**
+- API is not responding
+- `/health` endpoint returns error
+- Pods are restarting or unavailable
+
+## Diagnosis
 
 ```bash
+# Check pod status
 kubectl get pods -n geoip
-kubectl logs -l app=geoip-api -n geoip --tail=50
+
+# Check deployment status
+kubectl get deployment geoip-api -n geoip
+
+# Check application logs
+kubectl logs -l app=geoip-api -n geoip --tail=100
+
+# Describe failed pod
 kubectl describe pod -l app=geoip-api -n geoip
+
+# Check service connectivity
+kubectl get svc -n geoip
 ```
 
-### Resolution
+## Resolution
 
 ```bash
-# Restart deployment
+# Restart application deployment
 kubectl rollout restart deployment/geoip-api -n geoip
 
-# Check database connectivity
-kubectl exec -it deploy/geoip-api -n geoip -- wget -qO- http://localhost:8080/ready
+# Watch rollout status
+kubectl rollout status deployment/geoip-api -n geoip
 
-# Scale up if needed
+# Test health endpoint internally
+kubectl exec -it deploy/geoip-api -n geoip -- \
+wget -qO- http://localhost:8080/health
+
+# Test readiness endpoint
+kubectl exec -it deploy/geoip-api -n geoip -- \
+wget -qO- http://localhost:8080/ready
+
+# Scale application if required
 kubectl scale deployment/geoip-api -n geoip --replicas=3
 ```
 
 ---
 
-## RB-002: PostgreSQL Failover
+# RB-002: PostgreSQL Failure / Failover
 
-**Severity:** Critical  
-**Symptoms:** Database connection errors, replication lag alerts
+**Severity:** Critical
 
-### Diagnosis
+**Symptoms:**
+
+- GeoIP API cannot connect to database
+- `/ready` endpoint returns database error
+- PostgreSQL pods unavailable
+
+## Diagnosis
 
 ```bash
-kubectl get cluster geoip-postgres -n postgres
+# Check CloudNativePG cluster
+kubectl get cluster -n postgres
+
+# Check PostgreSQL pods
+kubectl get pods -n postgres
+
+# Check cluster status
 kubectl cnpg status geoip-postgres -n postgres
-kubectl get pods -n postgres -l cnpg.io/cluster=geoip-postgres
+
+# Check events
+kubectl describe cluster geoip-postgres -n postgres
 ```
 
-### Resolution
+## Resolution
 
-CloudNativePG handles automatic failover. Manual promotion if needed:
+CloudNativePG handles automatic failover.
+
+Check cluster recovery:
+
+```bash
+kubectl get pods -n postgres
+
+kubectl cnpg status geoip-postgres -n postgres
+```
+
+Restart application after database recovery:
+
+```bash
+kubectl rollout restart deployment/geoip-api -n geoip
+```
+
+Manual promotion if required:
 
 ```bash
 kubectl cnpg promote geoip-postgres <new-primary-pod> -n postgres
+```
+
+---
+
+# RB-003: High Cache Miss Rate
+
+**Severity:** Warning
+
+**Symptoms:**
+
+- Alert `GeoIPCacheMissRateHigh`
+- Increased external API calls
+- Higher response latency
+
+## Diagnosis
+
+Check Prometheus/Grafana metrics:
+
+```
+geoip_cache_hits_total
+geoip_cache_misses_total
+geoip_external_api_calls_total
+```
+
+Check database cache records:
+
+```bash
+kubectl exec -it geoip-postgres-1 -n postgres -- \
+psql -U geoip -c "SELECT count(*) FROM geoip_cache;"
+```
+
+## Resolution
+
+Possible actions:
+
+- Verify PostgreSQL storage health
+- Verify cache table availability
+- Check application logs
+- Increase cache TTL if required
+- Pre-warm cache with frequently requested IP addresses
+
+---
+
+# RB-004: External GeoIP Provider Failure
+
+**Severity:** Critical
+
+**Symptoms:**
+
+- External lookup failures
+- Alert `GeoIPExternalAPIFailures`
+- New IP lookups return errors
+
+## Diagnosis
+
+Check application logs:
+
+```bash
+kubectl logs -l app=geoip-api -n geoip | grep "external api"
+```
+
+Test external provider:
+
+```bash
+curl -v https://ipapi.co/8.8.8.8/json/
+```
+
+Check metrics:
+
+```
+geoip_external_api_calls_total
+geoip_external_api_duration_seconds
+```
+
+## Resolution
+
+Cached responses should continue working.
+
+If provider is unavailable:
+
+```bash
+# Change provider endpoint
+kubectl set env deployment/geoip-api \
+GEOIP_PROVIDER_URL=https://alternative-provider.com \
+-n geoip
+```
+
+Restart deployment:
+
+```bash
 kubectl rollout restart deployment/geoip-api -n geoip
 ```
 
 ---
 
-## RB-003: High Cache Miss Rate
+# RB-005: Kubernetes Node Not Ready
 
-**Severity:** Warning  
-**Symptoms:** Alert `GeoIPCacheMissRateHigh` firing
+**Severity:** Critical
 
-### Diagnosis
+**Symptoms:**
 
-```bash
-# Check metrics in Grafana
-# geoip_cache_hits_total vs geoip_cache_misses_total
+- NodeNotReady alert
+- Pods moved or evicted
+- Application downtime
 
-# Check database size
-kubectl exec -it geoip-postgres-1 -n postgres -- psql -U geoip -c "SELECT count(*) FROM geoip_cache;"
-```
-
-### Resolution
-
-- Normal after cache flush or new deployment
-- If persistent, check if PostgreSQL data is being lost (PVC issues)
-- Consider increasing cache TTL or pre-warming cache
-
----
-
-## RB-004: External GeoIP Provider Failure
-
-**Severity:** Critical  
-**Symptoms:** Alert `GeoIPExternalAPIFailures`, cache misses returning errors
-
-### Diagnosis
+## Diagnosis
 
 ```bash
-kubectl logs -l app=geoip-api -n geoip | grep "external api"
-curl -v "https://ipapi.co/8.8.8.8/json/"
-```
-
-### Resolution
-
-- Cached IPs will still work
-- Wait for provider recovery
-- Consider switching provider URL via env var:
-  ```bash
-  kubectl set env deployment/geoip-api GEOIP_PROVIDER_URL=https://alternative-provider.com -n geoip
-  ```
-
----
-
-## RB-005: Node Not Ready
-
-**Severity:** Critical  
-**Symptoms:** Alert `NodeNotReady`, pods evicted
-
-### Diagnosis
-
-```bash
+# Check nodes
 kubectl get nodes
+
+# Check node details
 kubectl describe node <node-name>
+
+# Check kubelet service
 ssh ubuntu@<node-ip> systemctl status kubelet
 ```
 
-### Resolution
+## Resolution
+
+Restart kubelet:
 
 ```bash
-# Restart kubelet
 ssh ubuntu@<node-ip> sudo systemctl restart kubelet
+```
 
-# If unrecoverable, drain and replace
-kubectl drain <node-name> --ignore-daemonsets --delete-emptydir-data
-# Replace VM via Terraform, re-run Ansible join
+Drain unhealthy node:
+
+```bash
+kubectl drain <node-name> \
+--ignore-daemonsets \
+--delete-emptydir-data
+```
+
+Infrastructure recovery:
+
+```bash
+# Recreate VM using Terraform
+cd terraform
+
+terraform plan
+terraform apply
+```
+
+Reconfigure Kubernetes:
+
+```bash
+cd ansible
+
+ansible-playbook site.yml
 ```
 
 ---
 
-## RB-006: Disk Space Full (Elasticsearch)
+# RB-006: Elasticsearch Disk Full
 
-**Severity:** Warning  
-**Symptoms:** Fluent Bit errors, logs not appearing in Kibana
+**Severity:** Warning
 
-### Diagnosis
+**Symptoms:**
+
+- Fluent Bit cannot send logs
+- Kibana shows missing logs
+- Elasticsearch rejects writes
+
+## Diagnosis
+
+Check Elasticsearch status:
 
 ```bash
-kubectl exec -it elasticsearch-0 -n logging -- curl -s localhost:9200/_cat/indices?v
+kubectl get pods -n logging
+
+kubectl exec -it elasticsearch-0 -n logging -- \
+curl -s localhost:9200/_cluster/health?pretty
+```
+
+Check indices:
+
+```bash
+kubectl exec -it elasticsearch-0 -n logging -- \
+curl -s localhost:9200/_cat/indices?v
+```
+
+Check storage:
+
+```bash
 kubectl get pvc -n logging
 ```
 
-### Resolution
+## Resolution
+
+Delete old indexes if required:
 
 ```bash
-# Delete old indices
-curl -X DELETE "elasticsearch.logging.svc:9200/geoip-logs-2024.01.*"
+kubectl exec -it elasticsearch-0 -n logging -- \
+curl -X DELETE \
+localhost:9200/geoip-logs-old-index
+```
 
-# Increase PVC size
-kubectl patch pvc data-elasticsearch-0 -n logging -p '{"spec":{"resources":{"requests":{"storage":"50Gi"}}}}'
+Increase PVC size:
+
+```bash
+kubectl patch pvc data-elasticsearch-0 \
+-n logging \
+-p '{"spec":{"resources":{"requests":{"storage":"50Gi"}}}}'
+```
+
+Restart logging components:
+
+```bash
+kubectl rollout restart deployment kibana -n logging
+kubectl rollout restart daemonset fluent-bit -n logging
 ```
 
 ---
 
-## RB-007: Deployment Rollback
+# RB-007: GeoIP API Deployment Rollback
 
-**Severity:** High  
-**Symptoms:** New deployment causing errors
+**Severity:** High
 
-### Resolution
+**Symptoms:**
+
+- New Docker image causes failures
+- Health checks failing
+- Application errors after deployment
+
+## Diagnosis
 
 ```bash
-# Rollback to previous version
-kubectl rollout undo deployment/geoip-api -n geoip
-
-# Rollback to specific revision
 kubectl rollout history deployment/geoip-api -n geoip
-kubectl rollout undo deployment/geoip-api -n geoip --to-revision=2
+```
 
-# Via ArgoCD
+## Resolution
+
+Rollback deployment:
+
+```bash
+kubectl rollout undo deployment/geoip-api -n geoip
+```
+
+Rollback to specific revision:
+
+```bash
+kubectl rollout undo deployment/geoip-api \
+-n geoip \
+--to-revision=2
+```
+
+GitOps rollback:
+
+```bash
+argocd app history geoip-api
+
 argocd app rollback geoip-api <revision>
 ```
 
----
-
-## RB-008: Certificate Renewal Failure
-
-**Severity:** Warning  
-**Symptoms:** TLS errors on ingress
-
-### Diagnosis
+Recommended GitOps method:
 
 ```bash
-kubectl get certificates -A
-kubectl describe certificate -n geoip
-kubectl logs -n cert-manager -l app=cert-manager
+git revert <commit-id>
+
+git push origin main
 ```
 
-### Resolution
+ArgoCD will automatically synchronize the previous state.
+
+---
+
+# RB-008: ArgoCD Sync Failure
+
+**Severity:** High
+
+**Symptoms:**
+
+- Application status is OutOfSync
+- Kubernetes resources are not updated
+
+## Diagnosis
 
 ```bash
-kubectl delete certificaterequest -n geoip --all
-# cert-manager will recreate automatically
+argocd app list
+
+argocd app get geoip-api
+
+kubectl get applications -n argocd
+```
+
+## Resolution
+
+Manual sync:
+
+```bash
+argocd app sync geoip-api
+```
+
+Restart ArgoCD components if required:
+
+```bash
+kubectl get pods -n argocd
+
+kubectl rollout restart deployment argocd-server -n argocd
+```
+
+---
+
+# RB-009: Docker Image Pull Failure
+
+**Severity:** High
+
+**Symptoms:**
+
+- Pod status:
+  - ImagePullBackOff
+  - ErrImagePull
+
+## Diagnosis
+
+```bash
+kubectl describe pod -n geoip -l app=geoip-api
+```
+
+Check image:
+
+```bash
+kubectl get deployment geoip-api \
+-n geoip \
+-o yaml | grep image
+```
+
+Current image:
+
+```
+docker.io/soroushmanhd/geoip-api:latest
+```
+
+## Resolution
+
+Test image availability:
+
+```bash
+docker pull soroushmanhd/geoip-api:latest
+```
+
+Restart deployment:
+
+```bash
+kubectl rollout restart deployment/geoip-api -n geoip
+```
+
+---
+
+# RB-010: Monitoring Stack Failure
+
+**Severity:** Warning
+
+**Symptoms:**
+
+- Grafana unavailable
+- Prometheus unavailable
+- Missing metrics
+
+## Diagnosis
+
+```bash
+kubectl get pods -n monitoring
+
+kubectl get servicemonitor -A
+
+kubectl get prometheus -n monitoring
+```
+
+Check Prometheus:
+
+```bash
+kubectl logs \
+prometheus-kube-prometheus-stack-prometheus-0 \
+-n monitoring
+```
+
+## Resolution
+
+Restart monitoring components:
+
+```bash
+kubectl rollout restart deployment kube-prometheus-stack-grafana \
+-n monitoring
+```
+
+Check Helm release:
+
+```bash
+helm list -n monitoring
+
+helm status kube-prometheus-stack -n monitoring
+```
+
+---
+
+# RB-011: Infrastructure Recovery
+
+**Severity:** Critical
+
+## Terraform Recovery
+
+```bash
+cd terraform
+
+terraform init
+
+terraform plan
+
+terraform apply
+```
+
+## Ansible Recovery
+
+```bash
+cd ansible
+
+ansible all -m ping
+
+ansible-playbook site.yml
+```
+
+## Kubernetes Validation
+
+```bash
+kubectl get nodes
+
+kubectl get pods -A
+
+kubectl get events -A --sort-by=.lastTimestamp
 ```

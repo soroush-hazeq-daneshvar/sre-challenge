@@ -1,128 +1,626 @@
-# معماری سیستم - SRE Challenge
+# Architecture Documentation
 
-## نمای کلی
+# SRE Challenge Architecture
 
-این پروژه یک پلتفرم GeoIP کامل و production-ready است که تمام لایه‌های زیرساخت تا اپلیکیشن را پوشش می‌دهد.
+## High Level Overview
 
-## دیاگرام معماری
+The platform follows a Cloud-Native architecture based on:
+
+- Infrastructure as Code (Terraform)
+- Configuration Management (Ansible)
+- Kubernetes orchestration
+- GitOps deployment with ArgoCD
+- Containerized application delivery
+- Observability stack (Prometheus + Grafana + Alertmanager)
+- Centralized logging (Fluent Bit + Elasticsearch + Kibana)
+
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        External Users                           │
-│                    GET /country?ip=8.8.8.8                      │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-                    ┌──────▼──────┐
-                    │ NGINX Ingress│
-                    └──────┬──────┘
-                           │
-              ┌────────────▼────────────┐
-              │     GeoIP API (Go)      │
-              │  ┌──────────────────┐   │
-              │  │ Cache Check      │   │
-              │  │ ↓ miss → ipapi.co│   │
-              │  │ ↓ hit → return   │   │
-              │  └──────────────────┘   │
-              │  /metrics (Prometheus)    │
-              └────────────┬────────────┘
-                           │
-              ┌────────────▼────────────┐
-              │  PostgreSQL (CNPG)      │
-              │  Primary + 2 Replicas   │
-              │  SSD Persistent Volumes │
-              └─────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                    Observability Stack                          │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐     │
-│  │Prometheus│→ │ Grafana  │  │Alertmgr  │→ │Email/Slack/  │     │
-│  │          │  │Dashboard │  │          │  │Telegram      │     │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────────┘     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐                      │
-│  │Fluent Bit│→ │Elastic-  │→ │ Kibana   │                      │
-│  │(DaemonSet│  │ search   │  │          │                      │
-│  └──────────┘  └──────────┘  └──────────┘                      │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                    Infrastructure Layer                         │
-│  Terraform → Ansible → K8s (1 CP + 2 Workers) → Calico CNI    │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                    CI/CD & GitOps                               │
-│  GitLab CI: Lint → Test → Build → Push → Deploy                │
-│  ArgoCD: Declarative sync from Git repository                   │
-└─────────────────────────────────────────────────────────────────┘
+                         Developer
+                            |
+                            |
+                            v
+                    GitHub Repository
+                            |
+                            |
+          +-----------------+----------------+
+          |                                  |
+          v                                  v
+ Infrastructure Code                 Application Code
+ Terraform                           Go GeoIP API
+ Ansible                             Dockerfile
+          |                                  |
+          |                                  |
+          v                                  v
+ Infrastructure Provisioning        Docker Image Build
+          |                                  |
+          |                                  v
+          |                          Docker Hub
+          |                                  |
+          |                                  |
+          +----------------+-----------------+
+                           |
+                           v
+                       ArgoCD
+                           |
+                           v
+                  Kubernetes Cluster
 ```
 
-## اجزای اصلی
+---
 
-### 1. Infrastructure (Terraform + Ansible)
+# Infrastructure Layer
 
-- **Terraform**: ایجاد 3 VM (1 Control Plane + 2 Worker) روی AWS
-- **Ansible**: OS Hardening، نصب containerd، Kubernetes 1.34، Calico CNI
+## Terraform
 
-### 2. Kubernetes Cluster
+Location:
 
-| Component | Role |
-|-----------|------|
-| Control Plane | etcd, api-server, scheduler, controller-manager |
-| Worker 1 & 2 | kubelet, kube-proxy, containerd |
-| CoreDNS | Cluster DNS |
-| Metrics Server | Resource metrics |
-| cert-manager | TLS certificates |
-| External Secrets | Secret management |
+```
+terraform/
+```
 
-### 3. GeoIP API (Go)
+Terraform is responsible for infrastructure provisioning.
 
-**Flow:**
-1. دریافت IP از query parameter
-2. جستجو در PostgreSQL cache
-3. در صورت miss، فراخوانی ipapi.co
-4. ذخیره نتیجه در cache
-5. بازگشت JSON response
+Responsibilities:
 
-**Metrics:**
-- `geoip_http_requests_total` - تعداد درخواست‌ها
-- `geoip_http_request_duration_seconds` - latency
-- `geoip_cache_hits_total` / `geoip_cache_misses_total` - نسبت cache
-- `geoip_external_api_calls_total` - فراخوانی‌های خارجی
+- Virtual Machine creation
+- Network configuration
+- Security groups
+- Infrastructure state management
 
-### 4. PostgreSQL HA (CloudNativePG)
 
-- 1 Primary + 2 Replicas
+Workflow:
+
+```
+Terraform
+    |
+    v
+Cloud Provider
+    |
+    v
+Virtual Machines
+```
+
+
+---
+
+## Ansible
+
+Location:
+
+```
+ansible/
+```
+
+Ansible configures the provisioned machines.
+
+Responsibilities:
+
+- Operating system preparation
+- Kernel configuration
+- Container runtime installation
+- Kubernetes installation
+- Cluster initialization
+
+
+Workflow:
+
+```
+Ansible
+    |
+    v
+Kubernetes Cluster
+```
+
+
+---
+
+# Application Delivery Flow
+
+
+```
+GitHub Repository
+
+        |
+        |
+        v
+
+Go Application Source
+
+app/geoip-api
+
+        |
+        |
+        v
+
+Docker Build
+
+        |
+        |
+        v
+
+Docker Hub
+
+soroushmanhd/geoip-api:latest
+
+        |
+        |
+        v
+
+ArgoCD
+
+        |
+        |
+        v
+
+Kubernetes Deployment
+```
+
+---
+
+# Kubernetes Architecture
+
+
+```
+Kubernetes Cluster
+
+|
+|
++-- kube-system
+|
+|   +-- Kubernetes Control Plane
+|   +-- CoreDNS
+|   +-- kube-proxy
+|
+|
++-- calico-system
+|
+|   +-- Calico CNI
+|
+|
++-- ingress-nginx
+|
+|   +-- NGINX Ingress Controller
+|
+|
++-- argocd
+|
+|   +-- ArgoCD Server
+|   +-- Application Controller
+|
+|
++-- geoip
+|
+|   +-- geoip-api Deployment
+|   |
+|   +-- Service
+|   |
+|   +-- Ingress
+|
+|
++-- postgres
+|
+|   +-- CloudNativePG Cluster
+|
+|
++-- monitoring
+|
+|   +-- kube-prometheus-stack
+|       |
+|       +-- Prometheus
+|       +-- Grafana
+|       +-- Alertmanager
+|
+|
++-- logging
+|
+    +-- Fluent Bit
+    |
+    +-- Elasticsearch
+    |
+    +-- Kibana
+```
+
+---
+
+# Application Architecture
+
+## GeoIP API
+
+
+```
+Client Request
+
+      |
+      v
+
+NGINX Ingress
+
+      |
+      v
+
+geoip-api Service
+
+      |
+      v
+
+GeoIP API Pods
+
+
+      |
+      +----------------+
+      |                |
+      v                v
+
+PostgreSQL        External Provider
+
+CloudNativePG     ipapi.co
+```
+
+---
+
+# GeoIP API Components
+
+
+## Deployment
+
+Namespace:
+
+```
+geoip
+```
+
+
+Deployment:
+
+```
+geoip-api
+```
+
+Features:
+
+- Multiple replicas
+- Health checks
+- Readiness probes
+- Prometheus metrics endpoint
+- Non-root container
+
+
+Container image:
+
+```
+soroushmanhd/geoip-api:latest
+```
+
+---
+
+# Database Architecture
+
+
+## CloudNativePG
+
+
+Namespace:
+
+```
+postgres
+```
+
+
+Architecture:
+
+
+```
+             PostgreSQL Cluster
+
+
+                 Primary
+
+                    |
+        +-----------+-----------+
+
+        |                       |
+
+        v                       v
+
+     Replica 1              Replica 2
+
+```
+
+
+Features:
+
 - Automatic failover
-- Persistent Volumes (SSD)
-- PodMonitor برای Prometheus
+- Streaming replication
+- Persistent storage
+- Kubernetes native management
 
-### 5. Monitoring Stack
 
-- **Prometheus**: جمع‌آوری metrics از app و cluster
-- **Grafana**: Dashboard اختصاصی GeoIP API
-- **Alertmanager**: ارسال alert به Email, Slack, Telegram
+---
 
-### 6. Logging Stack (ELK)
+# Monitoring Architecture
 
-- **Fluent Bit**: DaemonSet برای جمع‌آوری log تمام podها
-- **Elasticsearch**: ذخیره و index کردن logs
-- **Kibana**: جستجو و visualization
 
-## Network Flow
+Namespace:
 
 ```
-Client → Ingress (80/443) → GeoIP Service → Pod
-                                              ↓
-                                         PostgreSQL RW Service
-                                              ↓
-                                         Primary Instance
+monitoring
 ```
 
-## Security Considerations
 
-- OS hardening (SSH, UFW, fail2ban)
+Stack:
+
+
+```
+Application Metrics
+
+        |
+
+        v
+
+Prometheus
+
+        |
+
+        +------------+
+
+        |            |
+
+        v            v
+
+    Grafana    Alertmanager
+
+```
+
+
+Collected metrics:
+
+- API request count
+- Request latency
+- Cache hit ratio
+- External API failures
+- Kubernetes resources
+- Node health
+
+
+---
+
+# Logging Architecture
+
+
+Namespace:
+
+```
+logging
+```
+
+
+Flow:
+
+
+```
+Kubernetes Pods
+
+        |
+
+        v
+
+Fluent Bit
+
+(DaemonSet)
+
+        |
+
+        v
+
+Elasticsearch
+
+        |
+
+        v
+
+Kibana
+```
+
+
+Purpose:
+
+- Centralized log collection
+- Search
+- Troubleshooting
+- Operational visibility
+
+
+---
+
+# GitOps Architecture
+
+
+ArgoCD watches:
+
+```
+gitops/argocd/applications.yaml
+```
+
+
+Repository:
+
+```
+https://github.com/soroush-hazeq-daneshvar/sre-challenge
+```
+
+
+Application synchronization:
+
+
+```
+Git Repository
+
+        |
+
+        v
+
+ArgoCD
+
+        |
+
+        v
+
+Kubernetes Desired State
+
+        |
+
+        v
+
+Running Cluster State
+```
+
+
+ArgoCD features enabled:
+
+- Automated sync
+- Self healing
+- Resource pruning
+
+
+---
+
+# Network Flow
+
+
+```
+User
+
+ |
+
+ |
+
+ v
+
+Ingress-NGINX
+
+ |
+
+ |
+
+ v
+
+geoip-api Service
+
+ |
+
+ |
+
+ v
+
+GeoIP API Pod
+
+ |
+
+ +----------------+
+ |
+ v
+
+CloudNativePG PostgreSQL
+
+```
+
+
+---
+
+# Complete Platform View
+
+
+```
+                         GitHub
+
+                            |
+
+                            v
+
+                  CI / Docker Build
+
+                            |
+
+                            v
+
+                       Docker Hub
+
+                            |
+
+                            v
+
+                         ArgoCD
+
+                            |
+
+                            v
+
+                  Kubernetes Cluster
+
+        +-------------------+-------------------+
+
+        |                   |                   |
+
+        v                   v                   v
+
+
+   Applications        Data Layer        Observability
+
+
+   GeoIP API          PostgreSQL        Prometheus
+
+   Ingress            CloudNativePG     Grafana
+
+                                      Alertmanager
+
+
+                                      Logging
+
+
+                                      Fluent Bit
+
+                                      Elasticsearch
+
+                                      Kibana
+
+```
+
+---
+
+# Design Principles
+
+## Reliability
+
+- Kubernetes self-healing
+- PostgreSQL failover
+- Multiple application replicas
+
+
+## Scalability
+
+- Horizontal pod scaling
+- Additional worker nodes
+- Database replication
+
+
+## Maintainability
+
+- Terraform IaC
+- Ansible automation
+- GitOps workflow
+
+
+## Observability
+
+- Metrics with Prometheus
+- Dashboards with Grafana
+- Logs with Elasticsearch/Kibana
+
+
+## Security
+
 - Non-root containers
-- Read-only root filesystem
-- Secrets via Kubernetes Secrets / External Secrets
-- Network policies (Calico)
-- TLS via cert-manager
+- Kubernetes RBAC
+- OS hardening
+- Network isolation

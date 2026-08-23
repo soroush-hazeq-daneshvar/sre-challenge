@@ -2,109 +2,450 @@
 
 ## Overview
 
-The project uses GitLab CI/CD for automated build, test, and deployment, combined with ArgoCD for GitOps-based continuous delivery.
+The project uses a CI/CD pipeline for automated validation, testing, container image building, and Kubernetes deployment.
 
-## Pipeline Stages
+The deployment model follows GitOps principles:
+
+- Source code management: GitHub
+- Container registry: Docker Hub
+- Continuous Deployment: ArgoCD
+- Infrastructure provisioning: Terraform
+- Configuration management: Ansible
+
+Architecture:
+
+```
+Developer
+    |
+    v
+GitHub Repository
+    |
+    v
+CI Pipeline
+    |
+    +--> Validate Code
+    |
+    +--> Run Tests
+    |
+    +--> Build Docker Image
+    |
+    +--> Push Image to Docker Hub
+    |
+    v
+Update Kubernetes Manifest
+    |
+    v
+ArgoCD Sync
+    |
+    v
+Kubernetes Cluster
+```
+
+---
+
+# Pipeline Stages
 
 ```
 validate → test → build → deploy
 ```
 
-### Stage 1: Validate
+---
+
+# Stage 1: Validate
+
+The validation stage checks infrastructure, application code, and Kubernetes manifests.
 
 | Job | Tool | Purpose |
 |-----|------|---------|
-| `validate_terraform` | Terraform | Validate IaC syntax and formatting |
-| `validate_ansible` | ansible-lint | Lint Ansible playbooks |
-| `lint_go` | go vet, go fmt | Static analysis for Go code |
-| `validate_k8s_manifests` | conftest | Policy validation for K8s manifests |
+| validate_terraform | Terraform | Validate IaC syntax |
+| validate_ansible | ansible-lint | Validate Ansible roles and playbooks |
+| lint_go | go fmt, go vet | Static analysis for Go application |
+| validate_k8s | kubectl/kubeconform | Kubernetes manifest validation |
 
-### Stage 2: Test
+Examples:
+
+```bash
+terraform fmt -check
+terraform validate
+
+ansible-lint ansible/
+
+go fmt ./...
+go vet ./...
+
+kubectl apply --dry-run=client -f kubernetes/
+```
+
+---
+
+# Stage 2: Test
+
+Application tests are executed before building the container image.
 
 | Job | Tool | Purpose |
 |-----|------|---------|
-| `test_go` | go test | Unit tests with race detection and coverage |
+| test_go | go test | Execute unit tests |
+| integration_test | PostgreSQL container | Validate database integration |
 
-Uses PostgreSQL service container for integration testing.
+Example:
 
-### Stage 3: Build
+```bash
+cd app/geoip-api
 
-| Job | Tool | Purpose |
-|-----|------|---------|
-| `build_image` | Docker | Multi-stage build, push to GitLab Container Registry |
+go test ./...
+```
 
-**Docker Image:**
-- Base: `gcr.io/distroless/static-debian12:nonroot`
-- Tags: `$CI_COMMIT_SHA` and `latest`
+---
+
+# Stage 3: Build Docker Image
+
+The GeoIP API is packaged as a container image.
+
+Dockerfile characteristics:
+
+- Multi-stage Go build
+- Static binary compilation
+- Distroless runtime image
+- Non-root container execution
+
+
+Image:
+
+```
+soroushmanhd/geoip-api:latest
+```
+
+Build example:
+
+```bash
+cd app/geoip-api
+
+docker build \
+-t soroushmanhd/geoip-api:latest .
+```
+
+Push:
+
+```bash
+docker login
+
+docker push soroushmanhd/geoip-api:latest
+```
+
+Image security features:
+
 - Runs as non-root user
+- Minimal runtime filesystem
+- No unnecessary packages
+- Small attack surface
 
-### Stage 4: Deploy
+---
 
-| Job | Environment | Trigger | Approval |
-|-----|-------------|---------|----------|
-| `deploy_staging` | staging | Auto on `develop` branch | None |
-| `deploy_production` | production | Manual on `main` branch | Required |
+# Stage 4: Deployment
 
-## GitOps with ArgoCD
+Deployment is managed by ArgoCD.
+
+The CI pipeline does not directly execute kubectl against production.
+
+Flow:
 
 ```
-Developer → Git Push → GitLab CI (build & push image)
-                          ↓
-                    Update manifest (image tag)
-                          ↓
-                    ArgoCD detects drift
-                          ↓
-                    Auto-sync to cluster
+CI Pipeline
+      |
+      v
+Docker Hub Image
+      |
+      v
+Kubernetes Manifest Update
+      |
+      v
+GitHub Commit
+      |
+      v
+ArgoCD detects change
+      |
+      v
+Kubernetes Deployment
 ```
 
-### ArgoCD Applications
+---
 
-| App | Path | Namespace | Auto-sync |
-|-----|------|-----------|-----------|
-| geoip-api | kubernetes/geoip-api | geoip | Yes (prune + selfHeal) |
-| postgres | kubernetes/postgres | postgres | Yes |
-| monitoring | kubernetes/monitoring | monitoring | Yes (selfHeal) |
-| logging | kubernetes/logging | logging | Yes (selfHeal) |
+# GitOps with ArgoCD
 
-## Required CI/CD Variables
+ArgoCD watches:
+
+```
+gitops/argocd/applications.yaml
+```
+
+Repository:
+
+```
+https://github.com/soroush-hazeq-daneshvar/sre-challenge
+```
+
+Application structure:
+
+| Application | Path | Namespace | Sync |
+|-------------|------|-----------|------|
+| geoip-api | kubernetes/geoip-api | geoip | Automated |
+| postgres | kubernetes/postgres | postgres | Automated |
+| monitoring | kubernetes/monitoring | monitoring | Automated |
+| logging | kubernetes/logging | logging | Automated |
+
+---
+
+# ArgoCD Sync Policy
+
+Applications use:
+
+```yaml
+automated:
+  prune: true
+  selfHeal: true
+```
+
+Meaning:
+
+## Self Heal
+
+If somebody changes resources manually:
+
+```
+kubectl edit deployment geoip-api
+```
+
+ArgoCD restores the Git defined state.
+
+## Prune
+
+Removed resources from Git are automatically deleted from Kubernetes.
+
+---
+
+# Branch Strategy
+
+```
+main
+ |
+ +---- feature branches
+```
+
+Recommended workflow:
+
+```
+Feature branch
+        |
+        v
+Pull Request
+        |
+        v
+Validation + Tests
+        |
+        v
+Merge to main
+        |
+        v
+Build Image
+        |
+        v
+ArgoCD Deployment
+```
+
+---
+
+# Deployment Flow
+
+1. Developer changes application code.
+
+2. Push changes to GitHub.
+
+3. CI pipeline starts.
+
+4. Pipeline executes:
+
+```
+validate
+test
+build
+push image
+```
+
+5. New Docker image is published:
+
+```
+soroushmanhd/geoip-api:<tag>
+```
+
+6. Kubernetes manifest image tag is updated.
+
+7. ArgoCD detects Git change.
+
+8. ArgoCD synchronizes Kubernetes resources.
+
+9. New application version becomes available.
+
+---
+
+# Required CI/CD Secrets
+
+The following secrets are required:
 
 | Variable | Description |
 |----------|-------------|
-| `CI_REGISTRY_USER` | GitLab registry username |
-| `CI_REGISTRY_PASSWORD` | GitLab registry password/token |
-| `KUBE_CONTEXT_STAGING` | kubectl context for staging |
-| `KUBE_CONTEXT_PRODUCTION` | kubectl context for production |
+| DOCKERHUB_USERNAME | Docker Hub username |
+| DOCKERHUB_TOKEN | Docker Hub access token |
+| KUBECONFIG | Kubernetes cluster access configuration |
 
-## Branch Strategy
+---
+
+# Infrastructure Deployment Flow
+
+Infrastructure is separated from application deployment.
+
+## Infrastructure
+
+Terraform:
 
 ```
-main (production) ← merge ← develop (staging) ← feature branches
+terraform/
 ```
 
-- Feature branches: validate + test only
-- `develop`: validate + test + build + deploy staging
-- `main`: validate + test + build + manual deploy production
+Responsible for:
 
-## Deployment Flow
+- VM provisioning
+- Network creation
+- Security groups
+- Infrastructure state
 
-1. Developer pushes code to feature branch
-2. MR triggers validate + test stages
-3. Merge to `develop` triggers staging deployment
-4. QA validates on staging
-5. Merge to `main`, manually trigger production deployment
-6. ArgoCD ensures cluster matches Git state
 
-## Rollback Procedure
+Example:
 
 ```bash
-# Via kubectl
-kubectl rollout undo deployment/geoip-api -n geoip
+cd terraform
 
-# Via ArgoCD
-argocd app rollback geoip-api
+terraform init
 
-# Via Git (GitOps way)
-git revert <commit-sha>
-git push origin main
-# ArgoCD auto-syncs the reverted state
+terraform plan
+
+terraform apply
 ```
+
+
+## Configuration
+
+Ansible:
+
+```
+ansible/
+```
+
+Responsible for:
+
+- OS configuration
+- Container runtime
+- Kubernetes installation
+- Cluster initialization
+
+
+Example:
+
+```bash
+cd ansible
+
+ansible-playbook site.yml
+```
+
+---
+
+# Rollback Procedure
+
+## Kubernetes Rollback
+
+```bash
+kubectl rollout history deployment/geoip-api -n geoip
+
+kubectl rollout undo deployment/geoip-api -n geoip
+```
+
+---
+
+## ArgoCD Rollback
+
+```bash
+argocd app rollback geoip-api
+```
+
+---
+
+## GitOps Rollback
+
+Recommended method:
+
+```bash
+git revert <commit-id>
+
+git push origin main
+```
+
+ArgoCD automatically restores the previous state.
+
+---
+
+# Current Deployment Components
+
+```
+Kubernetes Cluster
+
+├── geoip-api
+│   └── soroushmanhd/geoip-api:latest
+│
+├── PostgreSQL
+│   └── CloudNativePG
+│
+├── Monitoring
+│   ├── Prometheus
+│   ├── Grafana
+│   └── Alertmanager
+│
+└── Logging
+    ├── Fluent Bit
+    ├── Elasticsearch
+    └── Kibana
+```
+
+---
+
+# Final Architecture
+
+```
+GitHub
+  |
+  |
+CI Pipeline
+  |
+  |
+Docker Hub
+  |
+  |
+ArgoCD
+  |
+  |
+Kubernetes
+  |
+  +-- GeoIP API
+  |
+  +-- PostgreSQL HA
+  |
+  +-- Monitoring Stack
+  |
+  +-- Logging Stack
+```
+
+This provides:
+
+- Automated delivery
+- Immutable container deployment
+- Git-based audit history
+- Kubernetes self-healing
+- Reproducible infrastructure

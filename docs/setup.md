@@ -267,6 +267,9 @@ Add Helm repository:
 helm repo add ingress-nginx \
 https://kubernetes.github.io/ingress-nginx
 
+# Expose ArgoCD through ingress
+kubectl apply \
+-f kubernetes/base/argocd-ingress.yaml
 
 helm repo update
 ```
@@ -628,7 +631,13 @@ Verify:
 kubectl get pods \
 -n argocd
 ```
-
+Retrive the admin password 
+```bash
+argocd-initial-admin-secret \
+-n argocd \
+-o jsonpath="{.data.password}" \
+| base64 -d
+```
 
 ---
 

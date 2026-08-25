@@ -1,0 +1,15 @@
+controller:
+  hostPort:
+    enabled: true
+
+  service:
+    type: NodePort
+
+  kind: Deployment
+
+  replicaCount: 1
+
+  ingressClassResource:
+    name: nginx
+    enabled: true
+    default: false

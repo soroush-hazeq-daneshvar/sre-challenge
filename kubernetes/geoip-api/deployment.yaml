@@ -22,33 +22,51 @@ spec:
       containers:
         - name: geoip-api
           image: docker.io/soroushmanhd/geoip-api:latest
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
           ports:
             - name: http
               containerPort: 8080
+
           env:
             - name: LISTEN_ADDR
               value: ":8080"
+
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: geoip-api-secrets
                   key: database-url
+
             - name: GEOIP_PROVIDER_URL
               value: "https://ipapi.co"
+
             - name: GEOIP_PROVIDER_TIMEOUT
               value: "5s"
+
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 15
+
           readinessProbe:
             httpGet:
               path: /ready
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+
           resources:
             requests:
               cpu: 100m
@@ -56,10 +74,7 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
-          securityContext:
-            runAsNonRoot: true
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
+
 ---
 apiVersion: v1
 kind: Service
@@ -75,6 +90,7 @@ spec:
     - name: http
       port: 80
       targetPort: http
+
 ---
 apiVersion: v1
 kind: Secret
@@ -84,6 +100,7 @@ metadata:
 type: Opaque
 stringData:
   database-url: "postgres://geoip:changeme-in-production@geoip-postgres-rw.postgres.svc:5432/geoip?sslmode=disable"
+
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -105,6 +122,7 @@ spec:
                 name: geoip-api
                 port:
                   number: 80
+
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -121,4 +139,3 @@ spec:
     - port: http
       path: /metrics
       interval: 15s
-

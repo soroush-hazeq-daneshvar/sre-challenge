@@ -633,6 +633,7 @@ kubectl get pods \
 ```
 Retrive the admin password 
 ```bash
+kubectl get secret \
 argocd-initial-admin-secret \
 -n argocd \
 -o jsonpath="{.data.password}" \

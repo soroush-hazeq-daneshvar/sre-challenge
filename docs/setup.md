@@ -1,1509 +1,1221 @@
 # راهنمای نصب و راه‌اندازی
 
-# Setup Guide - GeoIP Platform
+# Setup Guide - GeoIP SRE Platform
 
 This document describes the complete deployment process of the GeoIP SRE Platform.
 
-The deployment flow:
+The platform consists of:
 
-```text
-Terraform
-    |
-    v
-Ansible
-    |
-    v
-Kubernetes Cluster
-    |
-    +--> CloudNativePG PostgreSQL
-    |
-    +--> GeoIP API
-    |
-    +--> Monitoring Stack
-    |       +--> Prometheus
-    |       +--> Grafana
-    |       +--> Alertmanager
-    |
-    +--> Logging Stack
-    |       +--> Elasticsearch
-    |       +--> Fluent Bit
-    |       +--> Kibana
-    |
-    +--> NGINX Ingress
-    |
-    +--> ArgoCD GitOps
-```
+- Terraform infrastructure provisioning
+- Ansible Kubernetes cluster configuration
+- Kubernetes workloads
+- NGINX Ingress
+- GeoIP API
+- CloudNativePG PostgreSQL
+- Prometheus
+- Grafana
+- Alertmanager
+- Elasticsearch
+- Fluent Bit
+- Kibana
+- ArgoCD GitOps
 
 ---
 
-# 1. Prerequisites
+# 1. Architecture
+
+```text
+                         +----------------------+
+                         |      Developer       |
+                         +----------+-----------+
+                                    |
+                                    v
+                              GitLab CI/CD
+                                    |
+                                    v
+                              Docker Hub
+                                    |
+                                    v
+                         soroushmanhd/geoip-api
+                                    |
+                                    v
++----------------------------------------------------------------+
+|                         Kubernetes Cluster                     |
+|                                                                |
+|  +-------------------+                                         |
+|  |   NGINX Ingress   |                                         |
+|  |   NodePort :31406 |                                         |
+|  +---------+---------+                                         |
+|            |                                                   |
+|      +-----+------+----------------------+                     |
+|      |            |                      |                     |
+|      v            v                      v                     |
+| geoip.local  grafana.local        prometheus.local             |
+|      |            |                      |                     |
+|      v            v                      v                     |
+|  GeoIP API      Grafana             Prometheus                 |
+|                                                                |
+|      +------------------- Logging --------------------------+   |
+|      |                                                     |   |
+|      |  Kubernetes Pods                                    |   |
+|      |       |                                             |   |
+|      |       v                                             |   |
+|      |   Fluent Bit (DaemonSet)                            |   |
+|      |       |                                             |   |
+|      |       v                                             |   |
+|      |   Elasticsearch                                     |   |
+|      |       |                                             |   |
+|      |       v                                             |   |
+|      |     Kibana                                          |   |
+|      |                                                     |   |
+|      +-----------------------------------------------------+   |
+|                                                                |
+|      +-------------------+                                     |
+|      | CloudNativePG     |                                     |
+|      | PostgreSQL HA     |                                     |
+|      +-------------------+                                     |
+|                                                                |
+|      +-------------------+                                     |
+|      | ArgoCD            |                                     |
+|      | GitOps            |                                     |
+|      +-------------------+                                     |
++----------------------------------------------------------------+
+2. Prerequisites
 
 Required tools:
 
-| Tool      | Version | Purpose                       |
-| --------- | ------- | ----------------------------- |
-| Terraform | >= 1.5  | Infrastructure provisioning   |
-| Ansible   | >= 2.14 | Configuration management      |
-| kubectl   | >= 1.34 | Kubernetes management         |
-| Docker    | >= 24   | Container build               |
-| Go        | >= 1.22 | Application development       |
-| Helm      | >= 3.12 | Kubernetes package management |
-
-The Kubernetes cluster used by this project consists of:
-
-```text
-1 Control Plane
-2 Worker Nodes
-```
-
-Example:
-
-```text
-Control Plane:
-stg-hazegh-vm1.dc.snappcloud.io
-
-Worker:
-stg-hazegh-vm2.dc.snappcloud.io
-stg-hazegh-vm3.dc.snappcloud.io
-```
-
-Verify the cluster:
-
-```bash
-kubectl get nodes -o wide
-```
-
----
-
-# 2. Build Application Image
+Tool	Version	Purpose
+Terraform	>= 1.5	Infrastructure provisioning
+Ansible	>= 2.14	Configuration management
+kubectl	>= 1.34	Kubernetes management
+Docker	>= 24	Container build
+Go	>= 1.22	Application development
+Helm	>= 3.12	Kubernetes package management
+3. Build Application Image
 
 The application image is hosted on Docker Hub.
 
 Docker image:
 
-```text
 soroushmanhd/geoip-api:latest
-```
 
 Pull the image manually:
 
-```bash
 docker pull soroushmanhd/geoip-api:latest
-```
 
 Build locally:
 
-```bash
 cd app/geoip-api
 
 docker build \
-  -t soroushmanhd/geoip-api:latest \
-  .
-```
+  -t soroushmanhd/geoip-api:latest .
 
 Login to Docker Hub:
 
-```bash
 docker login
-```
 
 Push the image:
 
-```bash
 docker push soroushmanhd/geoip-api:latest
-```
-
----
-
-# 3. Infrastructure Provisioning with Terraform
+4. Infrastructure Provisioning with Terraform
 
 Terraform creates the required infrastructure.
 
 Components:
 
-* Virtual Machines
-* Network
-* Security Groups
-* Required cloud resources
-
-Go to the Terraform directory:
-
-```bash
-cd terraform
-```
-
-Create variables:
-
-```bash
-cp terraform.tfvars.example terraform.tfvars
-```
-
-Edit variables:
-
-```bash
-vim terraform.tfvars
-```
-
-Initialize Terraform:
-
-```bash
-terraform init
-```
-
-Validate configuration:
-
-```bash
-terraform validate
-```
-
-Review changes:
-
-```bash
-terraform plan
-```
-
-Apply infrastructure:
-
-```bash
-terraform apply
-```
-
-Generate the Ansible inventory:
-
-```bash
-terraform output -raw ansible_inventory \
-  > ../ansible/inventory/hosts.yml
-```
-
-Expected infrastructure:
-
-```text
-1 Control Plane Node
-2 Worker Nodes
-
+Virtual Machines
 Network
 Security Groups
 Storage
-```
+Kubernetes nodes
 
----
+Go to Terraform:
 
-# 4. Kubernetes Cluster Installation with Ansible
+cd terraform
 
-Move to the Ansible directory:
+Create variables:
 
-```bash
+cp terraform.tfvars.example terraform.tfvars
+
+Edit variables:
+
+vim terraform.tfvars
+
+Initialize Terraform:
+
+terraform init
+
+Validate:
+
+terraform validate
+
+Review changes:
+
+terraform plan
+
+Apply:
+
+terraform apply
+
+Generate Ansible inventory:
+
+terraform output -raw ansible_inventory \
+  > ../ansible/inventory/hosts.yml
+
+Expected infrastructure:
+
+1 Control Plane Node
+2 Worker Nodes
+Network
+Security Groups
+Storage
+5. Kubernetes Cluster Installation with Ansible
+
+Move to Ansible:
+
 cd ../ansible
-```
 
-Install Ansible collections:
+Install required collections:
 
-```bash
 ansible-galaxy collection install \
   -r requirements.yml
-```
 
 Test connectivity:
 
-```bash
 ansible all -m ping
-```
 
-Install the Kubernetes cluster:
+Install Kubernetes:
 
-```bash
 ansible-playbook site.yml
-```
 
-Connect to the control-plane node:
+Verify the cluster:
 
-```bash
 ssh ubuntu@<control-plane-ip>
-```
 
 Check nodes:
 
-```bash
-kubectl get nodes
-```
+kubectl get nodes -o wide
 
 Expected:
 
-```text
-NAME              STATUS   ROLES
-control-plane     Ready    control-plane
-worker-01         Ready    <none>
-worker-02         Ready    <none>
-```
+NAME                              STATUS   ROLES
+stg-hazegh-vm1.dc.snappcloud.io   Ready    control-plane
+stg-hazegh-vm2.dc.snappcloud.io   Ready    <none>
+stg-hazegh-vm3.dc.snappcloud.io   Ready    <none>
+6. Kubernetes Components
+6.1 Base Namespaces
 
----
+Create namespaces:
 
-# 5. Install Kubernetes Components
-
-## 5.1 Base Configuration
-
-Create the required namespaces:
-
-```bash
 kubectl apply \
   -f kubernetes/base/namespaces.yaml
-```
 
 Verify:
 
-```bash
 kubectl get namespaces
-```
 
-Expected:
+Expected namespaces include:
 
-```text
 geoip
 postgres
 monitoring
 logging
-```
+argocd
+ingress-nginx
+7. NGINX Ingress Controller
 
----
-
-# 5.2 NGINX Ingress Controller
-
-The project uses `ingress-nginx`.
+The project uses ingress-nginx.
 
 Add the Helm repository:
 
-```bash
 helm repo add ingress-nginx \
   https://kubernetes.github.io/ingress-nginx
-```
 
 Update Helm repositories:
 
-```bash
 helm repo update
-```
 
-Install or upgrade the ingress controller:
+Install ingress-nginx:
 
-```bash
 helm upgrade --install ingress-nginx \
   ingress-nginx/ingress-nginx \
   --namespace ingress-nginx \
   --create-namespace \
   -f kubernetes/base/ingress-nginx.yaml
-```
 
 Verify:
 
-```bash
 kubectl get pods \
   -n ingress-nginx
-```
-
-Expected:
-
-```text
-ingress-nginx-controller   Running
-```
 
 Verify the service:
 
-```bash
 kubectl get svc \
   -n ingress-nginx \
   ingress-nginx-controller
-```
 
-The current cluster exposes NGINX using a `LoadBalancer` service with NodePorts.
+The current setup exposes HTTP through NodePort:
 
-Example:
+HTTP  -> 31406
+HTTPS -> 31469
 
-```text
-HTTP   80:31406/TCP
-HTTPS  443:31469/TCP
-```
+The Kubernetes control-plane node is currently:
 
-Because the environment does not provide an external LoadBalancer IP, the NodePort is used for external access.
+10.160.1.22
 
-Check the actual assigned ports:
+Therefore the HTTP ingress endpoint is:
 
-```bash
-kubectl get svc \
-  -n ingress-nginx \
-  ingress-nginx-controller
-```
+http://10.160.1.22:31406
 
----
+Ingress traffic is routed using the HTTP Host header.
 
-# 5.3 StorageClass
+8. StorageClass
 
 The cluster uses Rancher Local Path Provisioner.
 
 Verify:
 
-```bash
 kubectl get storageclass
-```
 
 Expected:
 
-```text
 NAME
 local-path
-```
 
-The `local-path` StorageClass is used by stateful workloads such as:
+The StorageClass is used by:
 
-* PostgreSQL
-* Prometheus
-* Grafana
-* Elasticsearch
+Elasticsearch
+PostgreSQL
+Prometheus
+Grafana
+9. CloudNativePG PostgreSQL
 
-Verify:
+Install CloudNativePG:
 
-```bash
-kubectl get storageclass local-path
-```
-
----
-
-# 5.4 CloudNativePG Operator
-
-The project uses CloudNativePG.
-
-Install the operator:
-
-```bash
 kubectl apply \
-  -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.26/releases/cnpg-1.26.0.yaml
-```
+  -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.25/releases/cnpg-1.25.0.yaml
 
 Verify:
 
-```bash
 kubectl get pods \
   -n cnpg-system
-```
-
-Expected:
-
-```text
-cnpg-controller-manager   Running
-```
-
-Verify the operator version:
-
-```bash
-kubectl get deployment \
-  -n cnpg-system
-```
 
 Deploy PostgreSQL:
 
-```bash
 kubectl apply \
   -f kubernetes/postgres/cluster.yaml
-```
 
-Verify the cluster:
+Verify:
 
-```bash
 kubectl get cluster \
   -n postgres
-```
 
-Verify PostgreSQL pods:
+Check PostgreSQL pods:
 
-```bash
 kubectl get pods \
   -n postgres
-```
+10. Monitoring Stack
 
-Verify PostgreSQL services:
+Monitoring consists of:
 
-```bash
-kubectl get svc \
-  -n postgres
-```
+Prometheus
+Grafana
+Alertmanager
+kube-state-metrics
+node-exporter
 
-Expected services:
+Add the Helm repository:
 
-```text
-geoip-postgres-rw
-geoip-postgres-ro
-geoip-postgres-r
-```
-
-The application connects to the read-write service:
-
-```text
-geoip-postgres-rw.postgres.svc:5432
-```
-
----
-
-# 5.5 Monitoring Stack
-
-The monitoring stack consists of:
-
-* Prometheus
-* Grafana
-* Alertmanager
-* kube-state-metrics
-* node-exporter
-
-Add the Prometheus Community repository:
-
-```bash
 helm repo add prometheus-community \
   https://prometheus-community.github.io/helm-charts
-```
 
-Update repositories:
+Update:
 
-```bash
 helm repo update
-```
 
 Install kube-prometheus-stack:
 
-```bash
 helm upgrade --install kube-prometheus-stack \
   prometheus-community/kube-prometheus-stack \
   -n monitoring \
   --create-namespace \
   -f kubernetes/monitoring/prometheus/helm-values.yaml
-```
 
 Verify:
 
-```bash
 kubectl get pods \
   -n monitoring
-```
 
-Deploy alerts:
+Deploy Prometheus alerts:
 
-```bash
 kubectl apply \
   -f kubernetes/monitoring/prometheus/alerts.yaml
-```
 
-Deploy the GeoIP dashboard:
+Deploy GeoIP Grafana dashboard:
 
-```bash
 kubectl apply \
   -f kubernetes/monitoring/grafana/dashboard-geoip.yaml
-```
+11. Grafana
 
-Verify monitoring services:
-
-```bash
-kubectl get svc \
-  -n monitoring
-```
-
-Expected services include:
-
-```text
-kube-prometheus-stack-grafana
-kube-prometheus-stack-prometheus
-kube-prometheus-stack-alertmanager
-```
-
----
-
-## 5.5.1 Grafana
-
-Grafana is exposed through the NGINX Ingress controller.
-
-Ingress:
-
-```text
-grafana.local
-```
+Grafana is exposed through the NGINX Ingress.
 
 Verify:
 
-```bash
 kubectl get ingress \
   -n monitoring
-```
 
-Expected:
+Add the hostname to /etc/hosts:
 
-```text
-grafana   nginx   grafana.local
-```
+sudo sh -c 'echo "10.160.1.22 grafana.local" >> /etc/hosts'
 
-Get the Grafana password:
+Access:
 
-```bash
+http://grafana.local:31406
+
+Alternatively, test through curl:
+
+curl --noproxy '*' \
+  -H 'Host: grafana.local' \
+  http://10.160.1.22:31406
+
+Get Grafana password:
+
 kubectl get secret \
   kube-prometheus-stack-grafana \
   -n monitoring \
   -o jsonpath="{.data.admin-password}" \
   | base64 -d
-```
 
 Username:
 
-```text
 admin
-```
+12. Logging Stack
 
-### Local Access
+The logging architecture is:
 
-If using the ingress NodePort directly:
-
-```bash
-curl \
-  --noproxy '*' \
-  -H 'Host: grafana.local' \
-  http://<NODE-IP>:31406
-```
-
-Grafana should return:
-
-```text
-HTTP/1.1 302 Found
-Location: /login
-```
-
-You can also use port forwarding:
-
-```bash
-kubectl port-forward \
-  -n monitoring \
-  svc/kube-prometheus-stack-grafana \
-  3000:80
-```
-
-Then open:
-
-```text
-http://localhost:3000
-```
-
----
-
-# 5.6 Prometheus
-
-Prometheus is exposed through the NGINX Ingress controller.
-
-Ingress:
-
-```text
-prometheus.local
-```
-
-Verify:
-
-```bash
-kubectl get ingress \
-  -n monitoring
-```
-
-Expected:
-
-```text
-prometheus   nginx   prometheus.local
-```
-
-Test through the ingress NodePort:
-
-```bash
-curl \
-  --noproxy '*' \
-  -H 'Host: prometheus.local' \
-  http://<NODE-IP>:31406
-```
-
-Expected response:
-
-```text
-HTTP/1.1 302 Found
-Location: /query
-```
-
-Port-forward alternative:
-
-```bash
-kubectl port-forward \
-  -n monitoring \
-  svc/kube-prometheus-stack-prometheus \
-  9090:9090
-```
-
-Open:
-
-```text
-http://localhost:9090
-```
-
----
-
-# 5.7 Logging Stack
-
-Logging architecture:
-
-```text
 Kubernetes Pods
       |
       v
-  Fluent Bit
+ Fluent Bit
       |
       v
  Elasticsearch
       |
       v
     Kibana
-```
 
----
+Fluent Bit runs as a DaemonSet.
 
-## 5.7.1 Elasticsearch
+This means one Fluent Bit pod runs on each Kubernetes node.
 
-Deploy Elasticsearch:
+Verify Fluent Bit:
 
-```bash
-kubectl apply \
-  -f kubernetes/logging/elasticsearch/elasticsearch.yaml
-```
+kubectl get pods \
+  -n logging \
+  -l app=fluent-bit
+
+Expected:
+
+fluent-bit-xxxxx   1/1   Running
+fluent-bit-xxxxx   1/1   Running
+fluent-bit-xxxxx   1/1   Running
+13. Elasticsearch
+
+Elasticsearch runs as a single-node StatefulSet.
 
 Verify:
 
-```bash
 kubectl get pods \
   -n logging
-```
+
+Expected:
+
+elasticsearch-0   1/1   Running
+
+Verify Elasticsearch service:
+
+kubectl get svc \
+  -n logging \
+  elasticsearch
+
+Expected:
+
+elasticsearch   ClusterIP   <cluster-ip>   <none>   9200/TCP
+
+Elasticsearch is available internally at:
+
+http://elasticsearch.logging.svc:9200
+
+Test from Kubernetes:
+
+kubectl run curl-elasticsearch \
+  --rm -it \
+  --restart=Never \
+  --image=curlimages/curl \
+  -n logging \
+  -- \
+  curl http://elasticsearch:9200
+
+Expected response:
+
+{
+  "name": "elasticsearch-0",
+  "cluster_name": "docker-cluster",
+  "version": {
+    "number": "8.12.0"
+  },
+  "tagline": "You Know, for Search"
+}
+
+Check cluster health:
+
+kubectl run curl-elasticsearch \
+  --rm -it \
+  --restart=Never \
+  --image=curlimages/curl \
+  -n logging \
+  -- \
+  curl http://elasticsearch:9200/_cluster/health
+14. Elasticsearch Ingress
+
+Elasticsearch is exposed through:
+
+elasticsearch.local
+
+The ingress is:
+
+Client
+  |
+  v
+elasticsearch.local
+  |
+  v
+NGINX Ingress
+  |
+  v
+elasticsearch:9200
+
+Verify:
+
+kubectl get ingress \
+  -n logging
+
+Expected:
+
+NAME             CLASS   HOSTS
+elasticsearch    nginx   elasticsearch.local
+kibana           nginx   kibana.local
+
+Add the hostname:
+
+sudo sh -c 'echo "10.160.1.22 elasticsearch.local" >> /etc/hosts'
+
+Test:
+
+curl --noproxy '*' \
+  -H 'Host: elasticsearch.local' \
+  http://10.160.1.22:31406/
+
+You should receive the Elasticsearch JSON response.
+
+Check cluster health:
+
+curl --noproxy '*' \
+  -H 'Host: elasticsearch.local' \
+  http://10.160.1.22:31406/_cluster/health
+15. Fluent Bit
+
+Fluent Bit collects container logs from Kubernetes nodes and sends them to Elasticsearch.
+
+Verify the DaemonSet:
+
+kubectl get daemonset \
+  -n logging
+
+Check Fluent Bit pods:
+
+kubectl get pods \
+  -n logging \
+  -l app=fluent-bit
+
+Check Fluent Bit logs:
+
+kubectl logs \
+  -n logging \
+  -l app=fluent-bit \
+  --tail=100
+
+Look for successful Elasticsearch output messages.
+
+16. Verify Logs in Elasticsearch
+
+List Elasticsearch indices:
+
+curl --noproxy '*' \
+  -H 'Host: elasticsearch.local' \
+  http://10.160.1.22:31406/_cat/indices?v
+
+Search all documents:
+
+curl --noproxy '*' \
+  -H 'Host: elasticsearch.local' \
+  http://10.160.1.22:31406/_search?pretty
+
+Check document count:
+
+curl --noproxy '*' \
+  -H 'Host: elasticsearch.local' \
+  http://10.160.1.22:31406/_count?pretty
+
+If Fluent Bit is configured correctly, Elasticsearch should contain Kubernetes container logs.
+
+17. Kibana
+
+Kibana provides the web interface for Elasticsearch.
+
+Kibana connects internally to Elasticsearch using:
+
+http://elasticsearch.logging.svc:9200
+
+Verify the Kibana pod:
+
+kubectl get pods \
+  -n logging \
+  -l app=kibana
 
 Verify the service:
 
-```bash
 kubectl get svc \
-  -n logging
-```
+  -n logging \
+  kibana
 
 Expected:
 
-```text
-elasticsearch   ClusterIP   9200/TCP
-```
+kibana   ClusterIP   <cluster-ip>   <none>   5601/TCP
 
----
+Test Kibana internally:
 
-## 5.7.2 Fluent Bit
+kubectl run curl-kibana \
+  --rm -it \
+  --restart=Never \
+  --image=curlimages/curl \
+  -n logging \
+  -- \
+  curl -I http://kibana:5601/
 
-Deploy Fluent Bit:
+A successful response will normally be:
 
-```bash
-kubectl apply \
-  -f kubernetes/logging/fluent-bit/daemonset.yaml
-```
+HTTP/1.1 302 Found
+location: /spaces/enter
+
+This confirms that Kibana is running correctly.
+
+18. Kibana Ingress
+
+Kibana is exposed separately from Elasticsearch.
+
+Hostname:
+
+kibana.local
+
+Architecture:
+
+Browser
+   |
+   v
+kibana.local:31406
+   |
+   v
+NGINX Ingress
+   |
+   v
+Kibana Service :5601
+   |
+   v
+Kibana
+   |
+   v
+Elasticsearch :9200
+
+Add the hostname:
+
+sudo sh -c 'echo "10.160.1.22 kibana.local" >> /etc/hosts'
 
 Verify:
 
-```bash
-kubectl get pods \
-  -n logging
-```
-
-Fluent Bit should run as a DaemonSet so that logs can be collected from each Kubernetes node.
-
----
-
-## 5.7.3 Kibana
-
-Verify:
-
-```bash
-kubectl get pods \
-  -n logging
-```
-
-Verify the ingress:
-
-```bash
 kubectl get ingress \
   -n logging
-```
 
 Expected:
 
-```text
-kibana   nginx   kibana.local
-```
+NAME             CLASS   HOSTS
+elasticsearch    nginx   elasticsearch.local
+kibana           nginx   kibana.local
 
-Test through the ingress NodePort:
+Test:
 
-```bash
-curl \
-  --noproxy '*' \
+curl --noproxy '*' \
+  -v \
   -H 'Host: kibana.local' \
-  http://<NODE-IP>:31406
-```
+  http://10.160.1.22:31406/
 
-Kibana should redirect to:
+A successful response should contain:
 
-```text
-/spaces/enter
-```
+HTTP/1.1 302 Found
+location: /spaces/enter
 
----
+Open Kibana in a browser:
 
-# 5.8 Monitoring and Logging External Access
+http://kibana.local:31406
 
-The following services are exposed through NGINX Ingress:
+Important:
 
-| Service    | Host               | Backend    |
-| ---------- | ------------------ | ---------- |
-| ArgoCD     | `argocd.local`     | ArgoCD     |
-| GeoIP API  | `geoip.local`      | GeoIP API  |
-| Grafana    | `grafana.local`    | Grafana    |
-| Prometheus | `prometheus.local` | Prometheus |
-| Kibana     | `kibana.local`     | Kibana     |
+elasticsearch.local -> Elasticsearch API
+kibana.local        -> Kibana Web UI
 
-Verify all ingresses:
+Kibana should NOT return the Elasticsearch JSON response.
 
-```bash
-kubectl get ingress -A
-```
+19. Create Kibana Data View
 
-Expected:
+After opening Kibana:
 
-```text
-argocd       argocd-server   nginx   argocd.local
-geoip        geoip-api       nginx   geoip.local
-logging      kibana          nginx   kibana.local
-monitoring   grafana         nginx   grafana.local
-monitoring   prometheus      nginx   prometheus.local
-```
+http://kibana.local:31406
 
----
+Go to:
 
-## 5.8.1 Configure `/etc/hosts`
+Stack Management
+    |
+    +--> Data Views
 
-Because the cluster does not have an external LoadBalancer IP, map the hostnames to a Kubernetes node IP.
+Create a data view matching the Fluent Bit indices.
 
 For example:
 
-```text
-10.160.1.22 argocd.local
+logstash-*
+
+or:
+
+fluent-bit-*
+
+depending on the index configured in Fluent Bit.
+
+Select the timestamp field if available:
+
+@timestamp
+
+Then open:
+
+Analytics
+    |
+    +--> Discover
+
+You should be able to see Kubernetes logs.
+
+20. Kibana Log Dashboard
+
+Recommended dashboard panels:
+
++------------------------------------------------+
+|              Kubernetes Logs                   |
++------------------------------------------------+
+| Total Logs       | Errors       | Warnings     |
++------------------------------------------------+
+| Logs Over Time                                |
+|                                                |
+|              line chart                        |
++------------------------------------------------+
+| Logs by Namespace                              |
+|              bar chart                         |
++------------------------------------------------+
+| Logs by Pod                                    |
+|              bar chart                         |
++------------------------------------------------+
+| Error Logs                                     |
+|              table                             |
++------------------------------------------------+
+
+Useful filters:
+
+kubernetes.namespace_name
+kubernetes.pod_name
+kubernetes.container_name
+log
+level
+
+Recommended saved searches:
+
+All Logs
+Errors
+Warnings
+GeoIP API Logs
+PostgreSQL Logs
+Kubernetes System Logs
+21. Deploy GeoIP API
+
+The API image is:
+
+soroushmanhd/geoip-api:latest
+
+Deploy:
+
+kubectl apply \
+  -f kubernetes/geoip-api/
+
+Verify:
+
+kubectl get pods \
+  -n geoip
+
+Check rollout:
+
+kubectl rollout status \
+  deployment/geoip-api \
+  -n geoip
+22. GeoIP API Ingress
+
+Add:
+
+sudo sh -c 'echo "10.160.1.22 geoip.local" >> /etc/hosts'
+
+Verify:
+
+kubectl get ingress \
+  -n geoip
+
+Test:
+
+curl --noproxy '*' \
+  -H 'Host: geoip.local' \
+  http://10.160.1.22:31406/health
+
+Expected:
+
+{
+  "status": "healthy"
+}
+
+Country lookup:
+
+curl --noproxy '*' \
+  -H 'Host: geoip.local' \
+  http://10.160.1.22:31406/country?ip=8.8.8.8
+
+Expected:
+
+{
+  "ip": "8.8.8.8",
+  "country": "United States",
+  "cache_hit": false
+}
+
+Readiness:
+
+curl --noproxy '*' \
+  -H 'Host: geoip.local' \
+  http://10.160.1.22:31406/ready
+
+Metrics:
+
+curl --noproxy '*' \
+  -H 'Host: geoip.local' \
+  http://10.160.1.22:31406/metrics
+23. Local Host Configuration
+
+For local development/testing, add all ingress hostnames to /etc/hosts.
+
+sudo sh -c 'cat >> /etc/hosts <<EOF
 10.160.1.22 geoip.local
 10.160.1.22 grafana.local
 10.160.1.22 prometheus.local
 10.160.1.22 kibana.local
-```
-
-Edit:
-
-```bash
-sudo vim /etc/hosts
-```
-
-Or:
-
-```bash
-echo "10.160.1.22 argocd.local" | sudo tee -a /etc/hosts
-echo "10.160.1.22 geoip.local" | sudo tee -a /etc/hosts
-echo "10.160.1.22 grafana.local" | sudo tee -a /etc/hosts
-echo "10.160.1.22 prometheus.local" | sudo tee -a /etc/hosts
-echo "10.160.1.22 kibana.local" | sudo tee -a /etc/hosts
-```
-
-Verify DNS resolution:
-
-```bash
-ping -c 1 grafana.local
-ping -c 1 prometheus.local
-ping -c 1 kibana.local
-```
-
----
-
-## 5.8.2 Access Through the Ingress NodePort
-
-The NGINX ingress controller exposes:
-
-```text
-HTTP   NodePort 31406
-HTTPS  NodePort 31469
-```
-
-Check the actual values:
-
-```bash
-kubectl get svc \
-  -n ingress-nginx \
-  ingress-nginx-controller
-```
-
-For example:
-
-```text
-80:31406/TCP
-443:31469/TCP
-```
-
-Test Grafana:
-
-```bash
-curl \
-  --noproxy '*' \
-  -H 'Host: grafana.local' \
-  http://10.160.1.22:31406
-```
-
-Test Prometheus:
-
-```bash
-curl \
-  --noproxy '*' \
-  -H 'Host: prometheus.local' \
-  http://10.160.1.22:31406
-```
-
-Test Kibana:
-
-```bash
-curl \
-  --noproxy '*' \
-  -H 'Host: kibana.local' \
-  http://10.160.1.22:31406
-```
-
-Test ArgoCD:
-
-```bash
-curl \
-  --noproxy '*' \
-  -H 'Host: argocd.local' \
-  http://10.160.1.22:31406
-```
-
-ArgoCD redirects HTTP to HTTPS:
-
-```text
-HTTP/1.1 308 Permanent Redirect
-Location: https://argocd.local
-```
-
-Test GeoIP API:
-
-```bash
-curl \
-  --noproxy '*' \
-  -H 'Host: geoip.local' \
-  http://10.160.1.22:31406/health
-```
-
-Expected:
-
-```json
-{
-  "status": "healthy"
-}
-```
-
----
-
-# 5.9 Deploy GeoIP API
-
-The API deployment uses:
-
-```text
-soroushmanhd/geoip-api:latest
-```
-
-Deploy:
-
-```bash
-kubectl apply \
-  -f kubernetes/geoip-api/
-```
+10.160.1.22 elasticsearch.local
+10.160.1.22 argocd.local
+EOF'
 
 Verify:
 
-```bash
-kubectl get pods \
-  -n geoip
-```
+getent hosts \
+  geoip.local \
+  grafana.local \
+  prometheus.local \
+  kibana.local \
+  elasticsearch.local \
+  argocd.local
+24. Service Access Summary
 
-Check rollout:
+All HTTP services are accessed through the NGINX Ingress NodePort:
 
-```bash
-kubectl rollout status \
-  deployment/geoip-api \
-  -n geoip
-```
+10.160.1.22:31406
+Hostname	Backend	Port
+geoip.local	GeoIP API	80
+grafana.local	Grafana	80
+prometheus.local	Prometheus	80
+kibana.local	Kibana	5601
+elasticsearch.local	Elasticsearch	9200
+argocd.local	ArgoCD	443
 
-Verify the service:
+Browser URLs:
 
-```bash
-kubectl get svc \
-  -n geoip
-```
+http://geoip.local:31406
+http://grafana.local:31406
+http://prometheus.local:31406
+http://kibana.local:31406
+http://elasticsearch.local:31406
 
-Verify ingress:
+ArgoCD:
 
-```bash
-kubectl get ingress \
-  -n geoip
-```
-
-Expected:
-
-```text
-geoip-api   nginx   geoip.local
-```
-
----
-
-# 6. ArgoCD Installation
+https://argocd.local:31469
+25. ArgoCD Installation
 
 ArgoCD provides GitOps-based deployment.
 
-Create the namespace:
+Create namespace:
 
-```bash
 kubectl create namespace argocd
-```
 
-Install ArgoCD:
+Install:
 
-```bash
 kubectl apply \
   -n argocd \
   -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-```
 
-Wait for deployments:
+Wait:
 
-```bash
 kubectl wait \
   --for=condition=Available \
   deployment \
   --all \
   -n argocd \
   --timeout=300s
-```
 
 Verify:
 
-```bash
 kubectl get pods \
   -n argocd
-```
 
-Retrieve the initial admin password:
+Get admin password:
 
-```bash
 kubectl get secret \
   argocd-initial-admin-secret \
   -n argocd \
   -o jsonpath="{.data.password}" \
   | base64 -d
-```
 
 Username:
 
-```text
 admin
-```
-
----
-
-# 7. Deploy ArgoCD Applications
+26. Deploy ArgoCD Applications
 
 Apply GitOps applications:
 
-```bash
 kubectl apply \
   -f gitops/argocd/applications.yaml
-```
 
 Managed applications:
 
-| Application | Namespace  |
-| ----------- | ---------- |
-| geoip-api   | geoip      |
-| postgres    | postgres   |
-| monitoring  | monitoring |
-| logging     | logging    |
+Application	Namespace
+geoip-api	geoip
+postgres	postgres
+monitoring	monitoring
+logging	logging
 
-Check status:
+Check:
 
-```bash
 kubectl get applications \
   -n argocd
-```
+27. ArgoCD UI
 
-Expected:
+If using the ingress:
 
-```text
-NAME
-geoip-api
-postgres
-monitoring
-logging
-```
-
----
-
-# 8. Access ArgoCD UI
-
-ArgoCD is exposed through the NGINX Ingress.
-
-Verify:
-
-```bash
-kubectl get ingress \
-  -n argocd
-```
-
-Expected:
-
-```text
-argocd-server   nginx   argocd.local
-```
-
-Add the hostname to `/etc/hosts`:
-
-```text
-10.160.1.22 argocd.local
-```
-
-Because ArgoCD redirects HTTP to HTTPS, access:
-
-```text
-https://argocd.local
-```
-
-If the NodePort is required explicitly:
-
-```text
 https://argocd.local:31469
-```
 
-Alternatively, use port forwarding:
+Alternatively use port-forward:
 
-```bash
 kubectl port-forward \
   svc/argocd-server \
   -n argocd \
   8080:443
-```
 
 Open:
 
-```text
 https://localhost:8080
-```
 
-Get the initial password:
+Get password:
 
-```bash
 kubectl get secret \
   argocd-initial-admin-secret \
   -n argocd \
   -o jsonpath="{.data.password}" \
   | base64 -d
-```
 
 Username:
 
-```text
 admin
-```
+28. Application Testing
 
----
+Check Kubernetes resources:
 
-# 9. Application Testing
+kubectl get pods -A
 
-Configure the local hostnames:
+Check services:
 
-```bash
-sudo vim /etc/hosts
-```
+kubectl get svc -A
 
-Example:
+Check ingresses:
 
-```text
-10.160.1.22 argocd.local
-10.160.1.22 geoip.local
-10.160.1.22 grafana.local
-10.160.1.22 prometheus.local
-10.160.1.22 kibana.local
-```
-
-Check ingress configuration:
-
-```bash
 kubectl get ingress -A
-```
 
----
+Test GeoIP:
 
-## 9.1 GeoIP API
-
-Test the API through the ingress NodePort:
-
-```bash
-curl \
-  --noproxy '*' \
-  -H 'Host: geoip.local' \
-  http://10.160.1.22:31406/country?ip=8.8.8.8
-```
-
-Expected response:
-
-```json
-{
-  "ip": "8.8.8.8",
-  "country": "United States",
-  "cache_hit": false
-}
-```
-
-Health:
-
-```bash
-curl \
-  --noproxy '*' \
+curl --noproxy '*' \
   -H 'Host: geoip.local' \
   http://10.160.1.22:31406/health
-```
 
-Expected:
+Test Elasticsearch:
 
-```json
-{
-  "status": "healthy"
-}
-```
+curl --noproxy '*' \
+  -H 'Host: elasticsearch.local' \
+  http://10.160.1.22:31406/
 
-Ready:
+Test Kibana:
 
-```bash
-curl \
-  --noproxy '*' \
-  -H 'Host: geoip.local' \
-  http://10.160.1.22:31406/ready
-```
+curl --noproxy '*' \
+  -H 'Host: kibana.local' \
+  http://10.160.1.22:31406/
 
-Metrics:
+Test Prometheus:
 
-```bash
-curl \
-  --noproxy '*' \
-  -H 'Host: geoip.local' \
-  http://10.160.1.22:31406/metrics
-```
+curl --noproxy '*' \
+  -H 'Host: prometheus.local' \
+  http://10.160.1.22:31406/
 
----
+Test Grafana:
 
-## 9.2 Grafana
-
-Open:
-
-```text
-http://grafana.local
-```
-
-If direct port 80 is not exposed by the environment, use:
-
-```text
-http://grafana.local:31406
-```
-
-or access through the node IP:
-
-```text
-http://10.160.1.22:31406
-```
-
-with:
-
-```text
-Host: grafana.local
-```
-
----
-
-## 9.3 Prometheus
-
-Open:
-
-```text
-http://prometheus.local
-```
-
-If direct port 80 is not exposed:
-
-```text
-http://prometheus.local:31406
-```
-
----
-
-## 9.4 Kibana
-
-Open:
-
-```text
-http://kibana.local
-```
-
-If direct port 80 is not exposed:
-
-```text
-http://kibana.local:31406
-```
-
----
-
-## 9.5 ArgoCD
-
-Open:
-
-```text
-https://argocd.local
-```
-
-If direct HTTPS port 443 is not exposed:
-
-```text
-https://argocd.local:31469
-```
-
----
-
-# 10. Useful Troubleshooting Commands
-
-Check all nodes:
-
-```bash
-kubectl get nodes -o wide
-```
-
-Check all pods:
-
-```bash
-kubectl get pods -A
-```
-
-Check all services:
-
-```bash
-kubectl get svc -A
-```
-
-Check all ingresses:
-
-```bash
-kubectl get ingress -A
-```
-
-Check ingress controller:
-
-```bash
-kubectl get pods \
-  -n ingress-nginx
-
-kubectl get svc \
-  -n ingress-nginx
-```
-
-Check ingress controller logs:
-
-```bash
-kubectl logs \
-  -n ingress-nginx \
-  deployment/ingress-nginx-controller
-```
-
-Check a specific ingress:
-
-```bash
-kubectl describe ingress \
-  -n monitoring \
-  grafana
-```
-
-Check service endpoints:
-
-```bash
-kubectl get endpoints \
-  -n monitoring
-```
-
-Check EndpointSlices:
-
-```bash
-kubectl get endpointslice \
-  -n monitoring
-```
-
-Test an ingress route directly:
-
-```bash
-curl \
-  --noproxy '*' \
-  -v \
+curl --noproxy '*' \
   -H 'Host: grafana.local' \
-  http://10.160.1.22:31406
-```
-
----
-
-# 11. CI/CD
+  http://10.160.1.22:31406/
+29. CI/CD
 
 CI/CD architecture:
 
-```text
 Developer
+    |
+    v
+GitLab
     |
     v
 GitLab CI
     |
-    v
-Docker Build
+    +--> Test
+    |
+    +--> Build Docker Image
     |
     v
 Docker Hub
     |
-    | soroushmanhd/geoip-api
     v
 ArgoCD
     |
     v
 Kubernetes
-```
 
 Pipeline responsibilities:
 
-| Component  | Responsibility        |
-| ---------- | --------------------- |
-| GitLab CI  | Build, Test           |
-| Docker Hub | Container Registry    |
-| ArgoCD     | Continuous Deployment |
-| Kubernetes | Runtime               |
+Component	Responsibility
+GitLab CI	Build and test
+Docker Hub	Container registry
+ArgoCD	Continuous deployment
+Kubernetes	Runtime platform
 
----
+Docker image:
 
-# 12. Environment Variables
-
-| Variable               | Default          | Description           |
-| ---------------------- | ---------------- | --------------------- |
-| LISTEN_ADDR            | :8080            | API listen address    |
-| DATABASE_URL           | postgres://      | PostgreSQL connection |
-| GEOIP_PROVIDER_URL     | https://ipapi.co | GeoIP provider        |
-| GEOIP_PROVIDER_TIMEOUT | 5s               | Provider timeout      |
-
----
-
-# 13. Rollback
+soroushmanhd/geoip-api:latest
+30. Environment Variables
+Variable	Default	Description
+LISTEN_ADDR	:8080	API listen address
+DATABASE_URL	postgres://	PostgreSQL connection
+GEOIP_PROVIDER_URL	https://ipapi.co	GeoIP provider
+GEOIP_PROVIDER_TIMEOUT	5s	Provider timeout
+31. Rollback
 
 Kubernetes rollback:
 
-```bash
 kubectl rollout undo \
   deployment/geoip-api \
   -n geoip
-```
 
-Check rollout history:
+Check rollout:
 
-```bash
-kubectl rollout history \
+kubectl rollout status \
   deployment/geoip-api \
   -n geoip
-```
 
 GitOps rollback:
 
-```bash
 git revert <commit>
 
 git push origin main
-```
 
-ArgoCD automatically reconciles the Kubernetes cluster with the Git repository state.
+ArgoCD will detect the Git change and restore the desired Kubernetes state.
 
----
-
-# 14. Final Verification
-
-Before considering the platform operational, verify:
-
-### Kubernetes
-
-```bash
-kubectl get nodes
-kubectl get pods -A
-```
-
-### PostgreSQL
-
-```bash
-kubectl get cluster -n postgres
-kubectl get pods -n postgres
-kubectl get pvc -n postgres
-```
-
-### GeoIP API
-
-```bash
-kubectl get pods -n geoip
-kubectl get ingress -n geoip
-```
-
-### Monitoring
-
-```bash
-kubectl get pods -n monitoring
-kubectl get ingress -n monitoring
-```
-
-### Logging
-
-```bash
-kubectl get pods -n logging
-kubectl get ingress -n logging
-```
-
-### ArgoCD
-
-```bash
-kubectl get pods -n argocd
-kubectl get applications -n argocd
-kubectl get ingress -n argocd
-```
-
-### Ingress
-
-```bash
+32. Troubleshooting
+Check NGINX Ingress
+kubectl get pods \
+  -n ingress-nginx
 kubectl get svc \
+  -n ingress-nginx
+kubectl get ingress \
+  -A
+Check NGINX Configuration
+
+To verify that a hostname is correctly routed:
+
+kubectl exec \
   -n ingress-nginx \
-  ingress-nginx-controller
+  deployment/ingress-nginx-controller \
+  -- nginx -T 2>/dev/null \
+  | grep -A30 -B10 'kibana.local'
 
+For Elasticsearch:
+
+kubectl exec \
+  -n ingress-nginx \
+  deployment/ingress-nginx-controller \
+  -- nginx -T 2>/dev/null \
+  | grep -A30 -B10 'elasticsearch.local'
+Check Kibana Backend
+kubectl get endpoints \
+  -n logging \
+  kibana
+
+Expected:
+
+kibana   <pod-ip>:5601
+
+Test directly from inside Kubernetes:
+
+kubectl run curl-kibana \
+  --rm -it \
+  --restart=Never \
+  --image=curlimages/curl \
+  -n logging \
+  -- \
+  curl -I http://kibana:5601/
+
+Expected:
+
+HTTP/1.1 302 Found
+location: /spaces/enter
+Check Elasticsearch Backend
+kubectl get endpoints \
+  -n logging \
+  elasticsearch
+
+Test:
+
+kubectl run curl-elasticsearch \
+  --rm -it \
+  --restart=Never \
+  --image=curlimages/curl \
+  -n logging \
+  -- \
+  curl http://elasticsearch:9200/
+Check Fluent Bit
+kubectl logs \
+  -n logging \
+  -l app=fluent-bit \
+  --tail=200
+Check Elasticsearch Indices
+curl --noproxy '*' \
+  -H 'Host: elasticsearch.local' \
+  http://10.160.1.22:31406/_cat/indices?v
+33. Final Validation
+
+Run:
+
+kubectl get nodes -o wide
+kubectl get pods -A
+kubectl get svc -A
 kubectl get ingress -A
-```
 
-Expected external endpoints:
+Verify the following endpoints:
 
-```text
-GeoIP API       http://geoip.local
-Grafana         http://grafana.local
-Prometheus      http://prometheus.local
-Kibana          http://kibana.local
-ArgoCD          https://argocd.local
-```
+GeoIP API:
+http://geoip.local:31406
 
-When direct ports 80/443 are unavailable, use the ingress NodePorts:
+Grafana:
+http://grafana.local:31406
 
-```text
-HTTP  -> 31406
-HTTPS -> 31469
-```
+Prometheus:
+http://prometheus.local:31406
+
+Kibana:
+http://kibana.local:31406
+
+Elasticsearch:
+http://elasticsearch.local:31406
+
+ArgoCD:
+https://argocd.local:31469
+
+Final logging flow:
+
+Kubernetes Container
+        |
+        v
+   Fluent Bit
+        |
+        v
+ Elasticsearch
+        |
+        v
+      Kibana
+        |
+        v
+     Dashboard
+
+Final monitoring flow:
+
+Kubernetes
+    |
+    +--> node-exporter
+    |
+    +--> kube-state-metrics
+    |
+    v
+ Prometheus
+    |
+    +--> Alertmanager
+    |
+    v
+ Grafana
+
+The complete platform is now composed of:
+
+Terraform
+    |
+    v
+Ansible
+    |
+    v
+Kubernetes
+    |
+    +--> NGINX Ingress
+    |
+    +--> GeoIP API
+    |
+    +--> PostgreSQL / CloudNativePG
+    |
+    +--> Prometheus
+    |
+    +--> Grafana
+    |
+    +--> Alertmanager
+    |
+    +--> Fluent Bit
+    |
+    +--> Elasticsearch
+    |
+    +--> Kibana
+    |
+    +--> ArgoCD
